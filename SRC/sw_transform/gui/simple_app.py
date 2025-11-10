@@ -99,8 +99,8 @@ class SimpleMASWGUI:
     def _build_ui(self):
         left = tk.Frame(self.root, width=320); left.pack(side="left", fill="y")
         # Left toolbar with icon
-        btn_open = tk.Button(left, text=" Open SEG-2...", command=self.select_files, compound="left", padx=6)
-        ico = self._load_icon("ic_open.png", 56)
+        btn_open = tk.Button(left, text=" Open SEG-2...", command=self.select_files, compound="left", padx=6, pady=4)
+        ico = self._load_icon("ic_open.png", 32)
         if ico is not None:
             btn_open.config(image=ico)
         btn_open.pack(anchor="w", padx=8, pady=6)
@@ -139,8 +139,8 @@ class SimpleMASWGUI:
         fk = tk.Frame(pm); fk.pack(fill="x", pady=2)
         tk.Label(fk, text="FK/FDBF N").pack(side="left"); tk.Entry(fk, width=6, textvariable=self.grid_fk_var).pack(side="left", padx=4)
         tk.Label(fk, text="tol").pack(side="left"); tk.Entry(fk, width=6, textvariable=self.tol_fk_var).pack(side="left", padx=4)
-        # Vibrosis checkbox on the right side
-        tk.Checkbutton(fk, text="☐ Vibrosis (FDBF)", variable=self.vibrosis_mode).pack(side="right", padx=10)
+        # Vibrosis checkbox positioned after tolerance field
+        tk.Checkbutton(fk, text="Vibrosis (FDBF)", variable=self.vibrosis_mode).pack(side="left", padx=(20, 0))
         ps = tk.Frame(pm); ps.pack(fill="x", pady=2)
         tk.Label(ps, text="PS/SS N").pack(side="left"); tk.Entry(ps, width=6, textvariable=self.grid_ps_var).pack(side="left", padx=4)
         tk.Label(ps, text="vspace").pack(side="left")
@@ -170,16 +170,16 @@ class SimpleMASWGUI:
         cmb.current(0); cmb.pack(side="left", padx=6)
         cmb.bind("<<ComboboxSelected>>", lambda ev: self.method_key.set(ev.widget.get().split(" –")[0]))
         row = tk.Frame(r); row.pack(pady=4)
-        btn_run_sel = tk.Button(row, text=" Run Selected", command=lambda: self.run_single_processing(selected_only=True), compound="left", padx=6)
-        btn_run_all = tk.Button(row, text=" Run All", command=lambda: self.run_single_processing(selected_only=False), compound="left", padx=6)
-        ico_run = self._load_icon("ic_run.png", 56)
+        btn_run_sel = tk.Button(row, text=" Run Selected", command=lambda: self.run_single_processing(selected_only=True), compound="left", padx=8, pady=4)
+        btn_run_all = tk.Button(row, text=" Run All", command=lambda: self.run_single_processing(selected_only=False), compound="left", padx=8, pady=4)
+        ico_run = self._load_icon("ic_run.png", 32)
         if ico_run is not None:
             btn_run_sel.config(image=ico_run); btn_run_all.config(image=ico_run)
         btn_run_sel.pack(side="left", padx=4); btn_run_all.pack(side="left", padx=4)
         row2 = tk.Frame(r); row2.pack(pady=4)
-        btn_cmp_sel = tk.Button(row2, text=" Compare Selected", command=lambda: self.run_compare_processing(selected_only=True), compound="left", padx=6)
-        btn_cmp_all = tk.Button(row2, text=" Compare All", command=lambda: self.run_compare_processing(selected_only=False), compound="left", padx=6)
-        ico_cmp = self._load_icon("ic_compare.png", 56)
+        btn_cmp_sel = tk.Button(row2, text=" Compare Selected", command=lambda: self.run_compare_processing(selected_only=True), compound="left", padx=8, pady=4)
+        btn_cmp_all = tk.Button(row2, text=" Compare All", command=lambda: self.run_compare_processing(selected_only=False), compound="left", padx=8, pady=4)
+        ico_cmp = self._load_icon("ic_compare.png", 32)
         if ico_cmp is not None:
             btn_cmp_sel.config(image=ico_cmp); btn_cmp_all.config(image=ico_cmp)
         btn_cmp_sel.pack(side="left", padx=4); btn_cmp_all.pack(side="left", padx=4)
@@ -230,11 +230,11 @@ class SimpleMASWGUI:
         # Right sidebar explorer
         right = tk.Frame(outer, width=320); right.pack(side="left", fill="y", padx=6, pady=6)
         sb_tools = tk.Frame(right); sb_tools.pack(fill="x")
-        tk.Button(sb_tools, text="Refresh", command=self.refresh_gallery).pack(side="left")
-        tk.Button(sb_tools, text="Open", command=self._open_selected_figure).pack(side="left", padx=(6,0))
-        tk.Button(sb_tools, text="Delete", command=self._delete_selected_figure).pack(side="left", padx=(6,0))
-        btn_ppt = tk.Button(sb_tools, text=" Create PPT", command=self._build_ppt_from_gallery, compound="left", padx=6)
-        ico_ppt = self._load_icon("ic_ppt.png", 56)
+        tk.Button(sb_tools, text="Refresh", command=self.refresh_gallery, pady=2).pack(side="left")
+        tk.Button(sb_tools, text="Open", command=self._open_selected_figure, pady=2).pack(side="left", padx=(6,0))
+        tk.Button(sb_tools, text="Delete", command=self._delete_selected_figure, pady=2).pack(side="left", padx=(6,0))
+        btn_ppt = tk.Button(sb_tools, text=" PPT", command=self._build_ppt_from_gallery, compound="left", padx=6, pady=2)
+        ico_ppt = self._load_icon("ic_ppt.png", 28)
         if ico_ppt is not None:
             btn_ppt.config(image=ico_ppt)
         btn_ppt.pack(side="left", padx=(6,0))
@@ -786,27 +786,38 @@ class SimpleMASWGUI:
         return p
 
     def _load_icon(self, name: str, size: int) -> tk.PhotoImage | None:
-        """Load and cache an icon, auto-cropping transparent margins and centering."""
+        """Load and cache an icon, maintaining aspect ratio with proper scaling."""
         try:
             key = f"{name}:{size}"
             if key in self._icons:
                 return self._icons[key]
-            from PIL import Image, ImageOps, ImageTk
+            from PIL import Image, ImageTk
             p = self._asset_path(name)
             if not os.path.isfile(p):
                 return None
             im = Image.open(p).convert("RGBA")
-            # Remove transparent margins
-            # Auto-crop transparent margins and zoom to fill entire square (no padding, no margins)
+
+            # Auto-crop transparent margins
             alpha = im.split()[-1]
             bbox = alpha.getbbox()
             if bbox:
                 im = im.crop(bbox)
-            from PIL import ImageOps
-            im = ImageOps.fit(im, (size, size), method=Image.Resampling.LANCZOS)
-            # Place on white background (full-bleed)
-            bg = Image.new("RGBA", (size, size), (255, 255, 255, 255))
-            bg.alpha_composite(im, dest=(0, 0))
+
+            # Calculate scaling to fit within size x size while maintaining aspect ratio
+            orig_w, orig_h = im.size
+            scale = min(size / orig_w, size / orig_h)
+            new_w = int(orig_w * scale)
+            new_h = int(orig_h * scale)
+
+            # Resize maintaining aspect ratio with high-quality resampling
+            im = im.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+            # Create transparent background and center the icon
+            bg = Image.new("RGBA", (size, size), (255, 255, 255, 0))
+            offset_x = (size - new_w) // 2
+            offset_y = (size - new_h) // 2
+            bg.paste(im, (offset_x, offset_y), im)
+
             tkimg = ImageTk.PhotoImage(bg)
             self._icons[key] = tkimg
             return tkimg
