@@ -85,31 +85,27 @@ if weight_mode == 'invamp':  # For vibrosis sources
 
 ## GUI Usage
 
-### New Checkbox Interface
+### Checkbox Interface
 
-**Location**: Inputs Tab → "Seismic Source Type" section
+**Location**: Inputs Tab → "Per-method settings" section → FK/FDBF row (right side)
 
 **Appearance**:
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Seismic Source Type                                        │
+│  Per-method settings                                        │
 ├─────────────────────────────────────────────────────────────┤
-│  ☑ Enable Vibrosis Source Compensation (FDBF only)         │
-│                                                              │
-│  Check this if using truck-mounted vibrators or swept-      │
-│  frequency sources. This applies inverse-amplitude           │
-│  weighting to compensate for frequency-dependent             │
-│  attenuation in FDBF processing. Leave unchecked for        │
-│  hammer/impulse sources.                                     │
+│  FK/FDBF N: [4000]  tol: [0]         ☐ Vibrosis (FDBF)    │
+│  PS/SS N:   [1200]  vspace: [log▼]  tol: [0]               │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ### Features
 
-1. **Prominent Checkbox**: Blue, bold text, impossible to miss
-2. **Clear Labeling**: Explicitly states "FDBF only"
-3. **Help Text**: Built-in explanation (no need to consult manual)
+1. **Integrated Layout**: Checkbox positioned on same row as FK/FDBF settings
+2. **Concise Label**: "☐ Vibrosis (FDBF)" - clear and compact
+3. **Right-Side Position**: Easy to spot at the end of FK/FDBF row
 4. **Default**: Unchecked (hammer mode is default)
+5. **Help Available**: Detailed explanation available in Help menu
 
 ### When to Check the Box
 
@@ -202,7 +198,7 @@ Output includes:
 
 1. **`SRC/sw_transform/gui/simple_app.py`**
    - Line 67: Changed `source_type` StringVar to `vibrosis_mode` BooleanVar
-   - Lines 152-176: New checkbox interface with help text
+   - Line 143: Added vibrosis checkbox to FK/FDBF settings row (right side)
    - Lines 425-432: Convert boolean to source_type string in single processing
    - Lines 495-503: Convert boolean to source_type string in compare mode
 
@@ -278,8 +274,9 @@ See `IMPROVEMENTS_ROADMAP.md` section 4 for planned vibrosis improvements:
 ### Issue: Checkbox not visible
 
 **Solution**:
-- Scroll down in the Inputs tab
-- The "Seismic Source Type" section is below "Figure / Export"
+- Look in the "Per-method settings" section in the Inputs tab
+- The checkbox is on the right side of the FK/FDBF row
+- It appears as "☐ Vibrosis (FDBF)"
 
 ### Issue: No difference in results when enabling vibrosis mode
 

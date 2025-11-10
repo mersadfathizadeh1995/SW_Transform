@@ -139,6 +139,8 @@ class SimpleMASWGUI:
         fk = tk.Frame(pm); fk.pack(fill="x", pady=2)
         tk.Label(fk, text="FK/FDBF N").pack(side="left"); tk.Entry(fk, width=6, textvariable=self.grid_fk_var).pack(side="left", padx=4)
         tk.Label(fk, text="tol").pack(side="left"); tk.Entry(fk, width=6, textvariable=self.tol_fk_var).pack(side="left", padx=4)
+        # Vibrosis checkbox on the right side
+        tk.Checkbutton(fk, text="☐ Vibrosis (FDBF)", variable=self.vibrosis_mode).pack(side="right", padx=10)
         ps = tk.Frame(pm); ps.pack(fill="x", pady=2)
         tk.Label(ps, text="PS/SS N").pack(side="left"); tk.Entry(ps, width=6, textvariable=self.grid_ps_var).pack(side="left", padx=4)
         tk.Label(ps, text="vspace").pack(side="left")
@@ -148,32 +150,6 @@ class SimpleMASWGUI:
         figbox = tk.LabelFrame(p, text="Figure / Export"); figbox.pack(fill="x", padx=6, pady=4)
         tk.Label(figbox, text="Figure DPI").pack(side="left"); tk.Entry(figbox, width=6, textvariable=self.dpi_var).pack(side="left", padx=4)
         tk.Label(figbox, text="Topic").pack(side="left", padx=(12,2)); tk.Entry(figbox, width=36, textvariable=self.figure_topic_var).pack(side="left", padx=2)
-
-        # Source type selection for FDBF - Vibrosis compensation
-        sourcebox = tk.LabelFrame(p, text="Seismic Source Type", relief="groove", borderwidth=2)
-        sourcebox.pack(fill="x", padx=6, pady=6)
-
-        # Checkbox with clear labeling
-        vibrosis_check = tk.Checkbutton(
-            sourcebox,
-            text="☑ Enable Vibrosis Source Compensation (FDBF only)",
-            variable=self.vibrosis_mode,
-            font=("", 9, "bold"),
-            fg="#0066cc"
-        )
-        vibrosis_check.pack(anchor="w", padx=8, pady=6)
-
-        # Help text explaining when to use this
-        help_text = tk.Label(
-            sourcebox,
-            text="Check this if using truck-mounted vibrators or swept-frequency sources.\n"
-                 "This applies inverse-amplitude weighting to compensate for frequency-dependent\n"
-                 "attenuation in FDBF processing. Leave unchecked for hammer/impulse sources.",
-            font=("", 8),
-            fg="#666666",
-            justify="left"
-        )
-        help_text.pack(anchor="w", padx=8, pady=(0, 6))
 
         # Array preview (embedded)
         arr_box = tk.LabelFrame(p, text="Array preview (embedded)")
