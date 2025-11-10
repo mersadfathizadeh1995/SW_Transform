@@ -12,6 +12,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("path", help="SEG-2 .dat file path")
     p.add_argument("--outdir", required=True, help="output directory")
     p.add_argument("--offset", default="+0", help="offset label for plots")
+    p.add_argument("--source-type", default="hammer", choices=["hammer","vibrosis"],
+                   help="source type: 'hammer' (default) or 'vibrosis' (applies frequency compensation for FDBF)")
     p.add_argument("--params", default="{}", help="JSON dict of additional parameters")
     return p
 
@@ -32,6 +34,7 @@ def main(argv: list[str] | None = None) -> int:
         n_fk=4000, tol_fk=0.0, n_ps=1200, vspace_ps="log",
         rev_fk=True, rev_ps=True, rev_fdbf=False, rev_ss=False,
         topic="",
+        source_type=a.source_type,
     )
     params.update(extra)
     base, ok, out = run_compare(params)

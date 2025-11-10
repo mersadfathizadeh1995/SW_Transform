@@ -64,7 +64,7 @@ class SimpleMASWGUI:
         self.reverse_flags: dict[str, bool] = {}
         self.output_folder: str = ""
         self.method_key = tk.StringVar(value="fk")
-        self.source_type = tk.StringVar(value="hammer")
+        self.vibrosis_mode = tk.BooleanVar(value=False)  # False=hammer, True=vibrosis
 
         # inputs
         self.vmin_var = tk.StringVar(value="0"); self.vmax_var = tk.StringVar(value="5000")
@@ -149,10 +149,31 @@ class SimpleMASWGUI:
         tk.Label(figbox, text="Figure DPI").pack(side="left"); tk.Entry(figbox, width=6, textvariable=self.dpi_var).pack(side="left", padx=4)
         tk.Label(figbox, text="Topic").pack(side="left", padx=(12,2)); tk.Entry(figbox, width=36, textvariable=self.figure_topic_var).pack(side="left", padx=2)
 
-        # Source type selection for FDBF
-        sourcebox = tk.LabelFrame(p, text="Source Type (for FDBF)"); sourcebox.pack(fill="x", padx=6, pady=4)
-        tk.Radiobutton(sourcebox, text="Hammer", variable=self.source_type, value="hammer").pack(side="left", padx=6)
-        tk.Radiobutton(sourcebox, text="Vibrosis (Truck)", variable=self.source_type, value="vibrosis").pack(side="left", padx=6)
+        # Source type selection for FDBF - Vibrosis compensation
+        sourcebox = tk.LabelFrame(p, text="Seismic Source Type", relief="groove", borderwidth=2)
+        sourcebox.pack(fill="x", padx=6, pady=6)
+
+        # Checkbox with clear labeling
+        vibrosis_check = tk.Checkbutton(
+            sourcebox,
+            text="☑ Enable Vibrosis Source Compensation (FDBF only)",
+            variable=self.vibrosis_mode,
+            font=("", 9, "bold"),
+            fg="#0066cc"
+        )
+        vibrosis_check.pack(anchor="w", padx=8, pady=6)
+
+        # Help text explaining when to use this
+        help_text = tk.Label(
+            sourcebox,
+            text="Check this if using truck-mounted vibrators or swept-frequency sources.\n"
+                 "This applies inverse-amplitude weighting to compensate for frequency-dependent\n"
+                 "attenuation in FDBF processing. Leave unchecked for hammer/impulse sources.",
+            font=("", 8),
+            fg="#666666",
+            justify="left"
+        )
+        help_text.pack(anchor="w", padx=8, pady=(0, 6))
 
         # Array preview (embedded)
         arr_box = tk.LabelFrame(p, text="Array preview (embedded)")
@@ -401,12 +422,14 @@ class SimpleMASWGUI:
                 offset = self.offsets.get(base, "+0")
                 user_rev = self.reverse_flags.get(base, False)
                 rev = compute_reverse_flag(bool(user_rev), key)
+                # Convert vibrosis boolean to source_type string
+                source_type = "vibrosis" if self.vibrosis_mode.get() else "hammer"
                 params = dict(path=path, base=base, key=key, offset=offset, outdir=self.output_folder,
                               pick_vmin=pick_vmin, pick_vmax=pick_vmax, pick_fmin=pick_fmin, pick_fmax=pick_fmax,
                               st=st, en=en, downsample=downsample, dfac=dfac, numf=numf,
                               grid_n=grid_n, tol=tol, vspace=vspace, dpi=fig_dpi, rev=rev,
                               topic=(self.figure_topic_var.get() or ""),
-                              source_type=self.source_type.get())
+                              source_type=source_type)
                 if self.logbox: self.logbox.insert(tk.END, f"Running {base} [{key}]...\n"); self.logbox.see(tk.END)
                 _b, ok, out = svc_run_single(params)
                 if ok and isinstance(out, str) and out.lower().endswith('.png'):
@@ -469,13 +492,15 @@ class SimpleMASWGUI:
             base = os.path.splitext(os.path.basename(path))[0]
             offset = self.offsets.get(base, "+0")
             user_rev = self.reverse_flags.get(base, False)
+            # Convert vibrosis boolean to source_type string
+            source_type = "vibrosis" if self.vibrosis_mode.get() else "hammer"
             params = dict(path=path, base=base, outdir=self.output_folder, offset=offset,
                           pick_vmin=pick_vmin, pick_vmax=pick_vmax, pick_fmin=pick_fmin, pick_fmax=pick_fmax,
                           st=st, en=en, downsample=downsample, dfac=dfac, numf=numf,
                           n_fk=n_fk, tol_fk=tol_fk, n_ps=n_ps, vspace_ps=vspace_ps,
                           rev_fk=(not user_rev), rev_ps=(not user_rev), rev_fdbf=user_rev, rev_ss=user_rev,
                           topic=(self.figure_topic_var.get() or ""),
-                          source_type=self.source_type.get())
+                          source_type=source_type)
             if self.logbox: self.logbox.insert(tk.END, f"Compare {base}...\n"); self.logbox.see(tk.END)
             _b, ok, out = svc_run_compare(params)
             if ok and isinstance(out, str) and out.lower().endswith('.png'):
