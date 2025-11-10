@@ -13,6 +13,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--key", default="fk", choices=["fk","fdbf","ps","ss"], help="method key")
     p.add_argument("--outdir", required=True, help="output directory")
     p.add_argument("--offset", default="+0", help="offset label for plots")
+    p.add_argument("--source-type", default="hammer", choices=["hammer","vibrosis"],
+                   help="source type: 'hammer' (default) or 'vibrosis' (applies frequency compensation for FDBF)")
     p.add_argument("--params", default="{}", help="JSON dict of additional parameters")
     return p
 
@@ -36,6 +38,7 @@ def main(argv: list[str] | None = None) -> int:
         tol=0.0, vspace="log",
         dpi=200, rev=False,
         topic="",
+        source_type=a.source_type,
     )
     params.update(extra)
     base, ok, out = run_single(params)
