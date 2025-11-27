@@ -263,7 +263,43 @@
 
 ## 📊 Medium Priority (Features & Quality)
 
-### 7. Data Export Enhancements
+### 7. Power Spectrum Export (.npz)
+
+**Priority**: HIGH
+**Status**: 📋 Planned for implementation
+
+- [x] **Feature Planning Complete**:
+  - [x] Created detailed documentation (SPECTRUM_EXPORT_FEATURE.md)
+  - [x] Defined data format (NumPy .npz compressed)
+  - [x] Identified use cases (ML, QC, custom picking, multi-mode, publication)
+
+- [ ] **Implementation**:
+  - [ ] Add export functionality to core service layer
+  - [ ] Implement per-method spectrum saving (FK, FDBF, PS, SS)
+  - [ ] Add GUI checkbox: "☐ Export power spectra (.npz)"
+  - [ ] Add CLI flag: `--export-spectra`
+  - [ ] Add metadata to .npz files (offset, method, vibrosis mode, etc.)
+  - [ ] Update file naming convention (*_spectrum.npz)
+  - [ ] Test with real data files
+
+- [ ] **Documentation**:
+  - [ ] Add usage examples to README
+  - [ ] Update user guide with spectrum export section
+  - [ ] Create Jupyter notebook tutorial for loading/using spectra
+
+**Benefits**:
+- Custom dispersion curve picking algorithms
+- Multi-mode detection and extraction
+- Machine learning training data
+- Quality control and reliability assessment
+- Publication-quality figure generation
+- Uncertainty quantification for inversion
+
+**See**: `SPECTRUM_EXPORT_FEATURE.md` for complete feature documentation
+
+---
+
+### 8. Data Export Enhancements (Other Formats)
 
 **Priority**: MEDIUM
 **Status**: ⚠️ Basic CSV export works
