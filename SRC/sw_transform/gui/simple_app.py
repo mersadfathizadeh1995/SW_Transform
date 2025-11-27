@@ -432,6 +432,17 @@ class SimpleMASWGUI:
                     if self.logbox:
                         self.logbox.insert(tk.END, f"Warning: Could not create combined CSV: {e}\n")
                         self.logbox.see(tk.END)
+                # Create combined spectrum if export was enabled
+                if self.export_spectra_var.get() and success > 1:
+                    try:
+                        self._create_combined_spectrum_single_method(key, paths)
+                        if self.logbox:
+                            self.logbox.insert(tk.END, f"Created combined_{key}_spectrum.npz\n")
+                            self.logbox.see(tk.END)
+                    except Exception as e:
+                        if self.logbox:
+                            self.logbox.insert(tk.END, f"Warning: Could not create combined spectrum: {e}\n")
+                            self.logbox.see(tk.END)
             if success > 0 and failures == 0:
                 messagebox.showinfo("Run", f"Completed ({success} file(s))")
             elif success > 0:
@@ -503,6 +514,18 @@ class SimpleMASWGUI:
                 if self.logbox:
                     self.logbox.insert(tk.END, f"Warning: Could not create combined CSV: {e}\n")
                     self.logbox.see(tk.END)
+            # Create combined spectra for all 4 methods if export was enabled
+            if self.export_spectra_var.get() and success > 1:
+                for method in ['fk', 'fdbf', 'ps', 'ss']:
+                    try:
+                        self._create_combined_spectrum_single_method(method, paths)
+                        if self.logbox:
+                            self.logbox.insert(tk.END, f"Created combined_{method}_spectrum.npz\n")
+                            self.logbox.see(tk.END)
+                    except Exception as e:
+                        if self.logbox:
+                            self.logbox.insert(tk.END, f"Warning: Could not create combined {method} spectrum: {e}\n")
+                            self.logbox.see(tk.END)
         if success > 0 and failures == 0:
             messagebox.showinfo("Run", f"Comparison completed ({success} file(s))")
         elif success > 0:
@@ -644,6 +667,24 @@ class SimpleMASWGUI:
                         # Pad with empty cells matching header width
                         row.extend([""] * len(headers_map.get(base, [])))
                 writer.writerow(row)
+
+    def _create_combined_spectrum_single_method(self, key: str, paths: list):
+        """Create combined spectrum .npz file for a single method across all source offsets."""
+        import glob
+        from sw_transform.core.service import create_combined_spectrum
+
+        # Find all individual spectrum files for this method
+        pattern = os.path.join(self.output_folder, f"*_{key}_*_spectrum.npz")
+        spectrum_files = glob.glob(pattern)
+
+        # Exclude combined files
+        spectrum_files = [f for f in spectrum_files if not os.path.basename(f).startswith('combined_')]
+
+        if not spectrum_files:
+            return
+
+        # Create combined spectrum
+        create_combined_spectrum(self.output_folder, key, spectrum_files)
 
     # data helpers
     def _auto_assign_from_filenames(self):
