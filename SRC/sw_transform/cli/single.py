@@ -15,6 +15,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--offset", default="+0", help="offset label for plots")
     p.add_argument("--source-type", default="hammer", choices=["hammer","vibrosis"],
                    help="source type: 'hammer' (default) or 'vibrosis' (applies frequency compensation for FDBF)")
+    p.add_argument("--no-export-spectra", dest="export_spectra", action="store_false", default=True,
+                   help="disable power spectrum export to .npz files (enabled by default)")
     p.add_argument("--params", default="{}", help="JSON dict of additional parameters")
     return p
 
@@ -39,6 +41,7 @@ def main(argv: list[str] | None = None) -> int:
         dpi=200, rev=False,
         topic="",
         source_type=a.source_type,
+        export_spectra=a.export_spectra,
     )
     params.update(extra)
     base, ok, out = run_single(params)
