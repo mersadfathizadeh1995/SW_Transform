@@ -48,6 +48,50 @@ def _write_per_shot_csv(outdir: str, base: str, key: str, offset_label: str, f: 
             w.writerow([f[i], vmax[i], wav[i] if i < len(wav) else ""])
 
 
+def _save_spectrum_npz(outdir: str, base: str, key: str, offset: str,
+                       frequencies, velocities, power, picked_velocities,
+                       extra_metadata: Dict[str, Any] = None) -> str | None:
+    """Save power spectrum data to .npz file with metadata.
+
+    Returns the saved file path on success, None on failure (logs warning).
+    """
+    import numpy as np
+    from datetime import datetime
+
+    spectrum_file = os.path.join(outdir, f"{base}_{key}_spectrum.npz")
+
+    try:
+        # Prepare metadata dictionary
+        metadata = {
+            'frequencies': np.asarray(frequencies, dtype=np.float32),
+            'velocities': np.asarray(velocities, dtype=np.float32),
+            'power': np.asarray(power, dtype=np.float32),
+            'picked_velocities': np.asarray(picked_velocities, dtype=np.float32),
+            'method': key,
+            'offset': offset,
+            'export_date': datetime.now().isoformat(),
+            'version': '1.0'
+        }
+
+        # Add extra metadata if provided
+        if extra_metadata:
+            for k, v in extra_metadata.items():
+                # Convert numpy arrays to appropriate dtype
+                if hasattr(v, '__len__') and not isinstance(v, str):
+                    metadata[k] = np.asarray(v, dtype=np.float32)
+                else:
+                    metadata[k] = v
+
+        # Save compressed
+        np.savez_compressed(spectrum_file, **metadata)
+        return spectrum_file
+    except Exception as e:
+        # Silent failure - log warning but don't crash processing
+        import warnings
+        warnings.warn(f"Could not save spectrum to {spectrum_file}: {e}")
+        return None
+
+
 def run_single(params: Dict[str, Any]) -> Tuple[str, bool, str]:
     """Run one transform for one file (headless).
 
@@ -70,6 +114,7 @@ def run_single(params: Dict[str, Any]) -> Tuple[str, bool, str]:
     user_rev = bool(params.get('rev', False))
     topic = (params.get('topic') or "").strip()
     source_type = params.get('source_type', 'hammer')
+    export_spectra = bool(params.get('export_spectra', True))  # Default ON
 
     try:
         import matplotlib as mpl
@@ -92,6 +137,19 @@ def run_single(params: Dict[str, Any]) -> Tuple[str, bool, str]:
             f, k, pnorm, vmax, wav = step4(f, k, P, tol=tol)
             import numpy as np
             pnorm = np.abs(pnorm)
+            # Save spectrum before masking
+            if export_spectra:
+                # Create uniform velocity grid for spectrum export
+                nv = 400
+                vaxis = np.linspace(max(1.0, pick_vmin), pick_vmax, nv)
+                # Interpolate from k-space to v-space
+                P_vf = np.zeros((nv, len(f)))
+                for i, fi in enumerate(f):
+                    k_need = 2 * np.pi * fi / vaxis
+                    P_vf[:, i] = np.interp(k_need, k, pnorm[:, i], left=0.0, right=0.0)
+                # Save with wavenumber metadata
+                _save_spectrum_npz(outdir, base, key, offset, f, vaxis, P_vf, vmax,
+                                  extra_metadata={'wavenumbers': k, 'vibrosis_mode': (source_type == 'vibrosis')})
             mask = (vmax>=pick_vmin)&(vmax<=pick_vmax)&(f>=pick_fmin)&(f<=pick_fmax)
             vmax = np.where(mask, vmax, np.nan)
             pkw = base_pkw.copy(); pkw.update(dict(vmax_plot=pick_vmax, max_frequency=pick_fmax))
@@ -105,6 +163,20 @@ def run_single(params: Dict[str, Any]) -> Tuple[str, bool, str]:
             k, pnorm, vmax, wav = step4(R, f, dx, cylindrical=False, numk=grid_n, min_velocity=100, max_velocity=5000, tol=tol)
             import numpy as np
             pnorm = np.abs(pnorm)
+            # Save spectrum before plotting
+            if export_spectra:
+                # Create uniform velocity grid for spectrum export
+                nv = 400
+                vaxis = np.linspace(max(1.0, pick_vmin), pick_vmax, nv)
+                # Interpolate from k-space to v-space
+                P_vf = np.zeros((nv, len(f)))
+                for i, fi in enumerate(f):
+                    k_need = 2 * np.pi * fi / vaxis
+                    P_vf[:, i] = np.interp(k_need, k, pnorm[:, i], left=0.0, right=0.0)
+                # Save with FDBF-specific metadata
+                _save_spectrum_npz(outdir, base, key, offset, f, vaxis, P_vf, vmax,
+                                  extra_metadata={'wavenumbers': k, 'vibrosis_mode': (source_type == 'vibrosis'),
+                                                 'weight_mode': weight_mode})
             pkw = base_pkw.copy(); pkw.update(dict(max_velocity=pick_vmax, max_frequency=pick_fmax))
             from sw_transform.processing.fdbf import plot_freq_velocity_spectrum as _plot  # type: ignore
             _plot(f, k, pnorm, vmax, offset_label=offset, fig_name=fig_name, title=(topic or f"{base} FDBF"), **pkw)
@@ -113,6 +185,10 @@ def run_single(params: Dict[str, Any]) -> Tuple[str, bool, str]:
             pnorm, vmax, wav, f = step4(f0, vels, P)
             import numpy as np
             pnorm = np.abs(pnorm)
+            # Save spectrum (PS already in velocity space)
+            if export_spectra:
+                _save_spectrum_npz(outdir, base, key, offset, f, vels, pnorm, vmax,
+                                  extra_metadata={'vspace': vspace, 'vibrosis_mode': (source_type == 'vibrosis')})
             pkw = base_pkw.copy(); pkw.update(dict(vmax_plot=pick_vmax))
             from sw_transform.processing.ps import plot_phase_shift_dispersion as _plot  # type: ignore
             _plot(f, vels, pnorm, vmax, title=(topic or f"{base} PS"), offset_label=offset, fig_name=fig_name, **pkw)
@@ -121,6 +197,10 @@ def run_single(params: Dict[str, Any]) -> Tuple[str, bool, str]:
             pnorm, vmax, wav, f = step4(f0, vels, P)
             import numpy as np
             pnorm = np.abs(pnorm)
+            # Save spectrum (SS already in velocity space)
+            if export_spectra:
+                _save_spectrum_npz(outdir, base, key, offset, f, vels, pnorm, vmax,
+                                  extra_metadata={'vibrosis_mode': (source_type == 'vibrosis')})
             pkw = base_pkw.copy(); pkw.update(dict(vmax_plot=pick_vmax))
             from sw_transform.processing.ss import plot_slant_stack_dispersion as _plot  # type: ignore
             _plot(f, vels, pnorm, vmax, title=(topic or f"{base} τ–p"), offset_label=offset, fig_name=fig_name, **pkw)
@@ -155,6 +235,7 @@ def run_compare(params: Dict[str, Any]) -> Tuple[str, bool, str]:
     n_ps = int(params['n_ps']); vspace_ps = params['vspace_ps']
     topic = (params.get('topic') or '').strip()
     source_type = params.get('source_type', 'hammer')
+    export_spectra = bool(params.get('export_spectra', True))  # Default ON
     # reverse flags prepared by caller per-method
     rev_fk = bool(params.get('rev_fk', False)); rev_ps = bool(params.get('rev_ps', False))
     rev_fdbf = bool(params.get('rev_fdbf', False)); rev_ss = bool(params.get('rev_ss', False))
@@ -179,6 +260,10 @@ def run_compare(params: Dict[str, Any]) -> Tuple[str, bool, str]:
                 for i, fi in enumerate(f):
                     k_need = 2*np.pi*fi / vaxis
                     Z[:, i] = np.interp(k_need, k, mag[:, i], left=0.0, right=0.0)
+                # Save spectrum in compare mode
+                if export_spectra:
+                    _save_spectrum_npz(outdir, base, key, offset, f, vaxis, Z, vmax,
+                                      extra_metadata={'wavenumbers': k, 'vibrosis_mode': (source_type == 'vibrosis')})
                 ax.contourf(f, vaxis, Z, 30, cmap='jet'); ax.plot(f, vmax, 'o', mfc='none', mec='white', ms=3)
             elif key == 'fdbf':
                 fs = 1.0/dt2
@@ -193,16 +278,31 @@ def run_compare(params: Dict[str, Any]) -> Tuple[str, bool, str]:
                 for i, fi in enumerate(f):
                     k_need = 2*np.pi*fi / vaxis
                     Z[:, i] = np.interp(k_need, k, mag[:, i], left=0.0, right=0.0)
+                # Save spectrum in compare mode
+                if export_spectra:
+                    _save_spectrum_npz(outdir, base, key, offset, f, vaxis, Z, vmax,
+                                      extra_metadata={'wavenumbers': k, 'vibrosis_mode': (source_type == 'vibrosis'),
+                                                     'weight_mode': weight_mode})
                 ax.contourf(f, vaxis, Z, 30, cmap='jet'); ax.plot(f, vmax, 'o', mfc='none', mec='white', ms=3)
             elif key == 'ps':
                 step3, step4 = _dyn(tuple(METHODS['ps']['step3'])), _dyn(tuple(METHODS['ps']['step4']))
                 f0, vels, P = step3(Tpre, dt2, dx, fmin=0, fmax=max_freq, nvel=n_ps, vmin=100, vmax=5000, vspace=vspace_ps)
                 pnorm, vmax, wav, f = step4(f0, vels, P)
+                # Save spectrum in compare mode
+                if export_spectra:
+                    import numpy as np
+                    _save_spectrum_npz(outdir, base, key, offset, f, vels, np.abs(pnorm), vmax,
+                                      extra_metadata={'vspace': vspace_ps, 'vibrosis_mode': (source_type == 'vibrosis')})
                 ax.contourf(f, vels, pnorm, 30, cmap='jet'); ax.plot(f, vmax, 'o', mfc='none', mec='white', ms=3)
             else:
                 step3, step4 = _dyn(tuple(METHODS['ss']['step3'])), _dyn(tuple(METHODS['ss']['step4']))
                 f0, vels, P = step3(Tpre, dt2, dx, fmin=0, fmax=max_freq, nvel=n_ps, vmin=100, vmax=5000, vspace=vspace_ps)
                 pnorm, vmax, wav, f = step4(f0, vels, P)
+                # Save spectrum in compare mode
+                if export_spectra:
+                    import numpy as np
+                    _save_spectrum_npz(outdir, base, key, offset, f, vels, np.abs(pnorm), vmax,
+                                      extra_metadata={'vibrosis_mode': (source_type == 'vibrosis')})
                 ax.contourf(f, vels, pnorm, 30, cmap='jet'); ax.plot(f, vmax, 'o', mfc='none', mec='white', ms=3)
             ax.set_xlim(pick_fmin, pick_fmax); ax.set_ylim(pick_vmin, pick_vmax)
             ax.set_title(key.upper()); ax.set_xlabel('Frequency (Hz)'); ax.set_ylabel('Phase Velocity (m/s)')

@@ -77,6 +77,7 @@ class SimpleMASWGUI:
         self.dpi_var = tk.StringVar(value="200")
         self.figure_topic_var = tk.StringVar(value="3-D Dispersion (Freq vs. Velocity)")
         self.ppt_var = tk.BooleanVar(value=False)
+        self.export_spectra_var = tk.BooleanVar(value=True)  # Default ON for spectrum export
 
         self._build_menu()
         self._build_ui()
@@ -148,8 +149,11 @@ class SimpleMASWGUI:
         tk.Label(ps, text="tol").pack(side="left"); tk.Entry(ps, width=6, textvariable=self.tol_ps_var).pack(side="left", padx=4)
 
         figbox = tk.LabelFrame(p, text="Figure / Export"); figbox.pack(fill="x", padx=6, pady=4)
-        tk.Label(figbox, text="Figure DPI").pack(side="left"); tk.Entry(figbox, width=6, textvariable=self.dpi_var).pack(side="left", padx=4)
-        tk.Label(figbox, text="Topic").pack(side="left", padx=(12,2)); tk.Entry(figbox, width=36, textvariable=self.figure_topic_var).pack(side="left", padx=2)
+        row1 = tk.Frame(figbox); row1.pack(fill="x", pady=2)
+        tk.Label(row1, text="Figure DPI").pack(side="left"); tk.Entry(row1, width=6, textvariable=self.dpi_var).pack(side="left", padx=4)
+        tk.Label(row1, text="Topic").pack(side="left", padx=(12,2)); tk.Entry(row1, width=36, textvariable=self.figure_topic_var).pack(side="left", padx=2)
+        row2 = tk.Frame(figbox); row2.pack(fill="x", pady=2)
+        tk.Checkbutton(row2, text="Export power spectra (.npz)", variable=self.export_spectra_var).pack(side="left")
 
         # Array preview (embedded)
         arr_box = tk.LabelFrame(p, text="Array preview (embedded)")
@@ -405,7 +409,8 @@ class SimpleMASWGUI:
                               st=st, en=en, downsample=downsample, dfac=dfac, numf=numf,
                               grid_n=grid_n, tol=tol, vspace=vspace, dpi=fig_dpi, rev=rev,
                               topic=(self.figure_topic_var.get() or ""),
-                              source_type=source_type)
+                              source_type=source_type,
+                              export_spectra=self.export_spectra_var.get())
                 if self.logbox: self.logbox.insert(tk.END, f"Running {base} [{key}]...\n"); self.logbox.see(tk.END)
                 _b, ok, out = svc_run_single(params)
                 if ok and isinstance(out, str) and out.lower().endswith('.png'):
@@ -476,7 +481,8 @@ class SimpleMASWGUI:
                           n_fk=n_fk, tol_fk=tol_fk, n_ps=n_ps, vspace_ps=vspace_ps,
                           rev_fk=(not user_rev), rev_ps=(not user_rev), rev_fdbf=user_rev, rev_ss=user_rev,
                           topic=(self.figure_topic_var.get() or ""),
-                          source_type=source_type)
+                          source_type=source_type,
+                          export_spectra=self.export_spectra_var.get())
             if self.logbox: self.logbox.insert(tk.END, f"Compare {base}...\n"); self.logbox.see(tk.END)
             _b, ok, out = svc_run_compare(params)
             if ok and isinstance(out, str) and out.lower().endswith('.png'):
