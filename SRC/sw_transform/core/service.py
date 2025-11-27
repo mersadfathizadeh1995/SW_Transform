@@ -58,7 +58,16 @@ def _save_spectrum_npz(outdir: str, base: str, key: str, offset: str,
     import numpy as np
     from datetime import datetime
 
-    spectrum_file = os.path.join(outdir, f"{base}_{key}_spectrum.npz")
+    # Convert offset to tag format (same as CSV naming: +66m -> p66)
+    _off = str(offset).strip().replace(" ", "").replace("m", "")
+    if _off.startswith("+"):
+        _off_tag = "p" + _off[1:]
+    elif _off.startswith("-"):
+        _off_tag = "m" + _off[1:]
+    else:
+        _off_tag = _off
+
+    spectrum_file = os.path.join(outdir, f"{base}_{key}_{_off_tag}_spectrum.npz")
 
     try:
         # Prepare metadata dictionary
@@ -89,6 +98,95 @@ def _save_spectrum_npz(outdir: str, base: str, key: str, offset: str,
         # Silent failure - log warning but don't crash processing
         import warnings
         warnings.warn(f"Could not save spectrum to {spectrum_file}: {e}")
+        return None
+
+
+def create_combined_spectrum(outdir: str, method: str, spectrum_files: List[str]) -> str | None:
+    """Create combined spectrum .npz file from multiple individual spectrum files.
+
+    Args:
+        outdir: Output directory
+        method: Method name ('fk', 'fdbf', 'ps', 'ss')
+        spectrum_files: List of individual spectrum .npz file paths
+
+    Returns:
+        Path to combined file on success, None on failure
+    """
+    import numpy as np
+    from datetime import datetime
+    import glob
+
+    if not spectrum_files:
+        return None
+
+    try:
+        # Load all individual spectrum files
+        spectra_data = []
+        for fpath in spectrum_files:
+            if not os.path.isfile(fpath):
+                continue
+            data = np.load(fpath)
+            # Extract offset tag from filename
+            # Format: <base>_<method>_<offset_tag>_spectrum.npz
+            fname = os.path.basename(fpath).replace('_spectrum.npz', '')
+            parts = fname.split('_')
+            # Find method index
+            method_idx = -1
+            for i, part in enumerate(parts):
+                if part == method:
+                    method_idx = i
+                    break
+            if method_idx >= 0 and method_idx < len(parts) - 1:
+                offset_tag = parts[method_idx + 1]
+            else:
+                offset_tag = 'unknown'
+
+            spectra_data.append({
+                'offset_tag': offset_tag,
+                'frequencies': data['frequencies'],
+                'velocities': data['velocities'],
+                'power': data['power'],
+                'picked_velocities': data['picked_velocities'],
+                'metadata': {k: data[k] for k in data.files if k not in
+                           ['frequencies', 'velocities', 'power', 'picked_velocities']}
+            })
+
+        if not spectra_data:
+            return None
+
+        # Sort by offset tag for consistent ordering
+        spectra_data.sort(key=lambda x: x['offset_tag'])
+
+        # Build combined metadata dictionary
+        combined = {
+            'method': method,
+            'offsets': np.array([s['offset_tag'] for s in spectra_data], dtype=object),
+            'export_date': datetime.now().isoformat(),
+            'version': '1.0',
+            'num_offsets': len(spectra_data)
+        }
+
+        # Add per-offset data with suffix
+        for spec in spectra_data:
+            tag = spec['offset_tag']
+            combined[f'frequencies_{tag}'] = np.asarray(spec['frequencies'], dtype=np.float32)
+            combined[f'velocities_{tag}'] = np.asarray(spec['velocities'], dtype=np.float32)
+            combined[f'power_{tag}'] = np.asarray(spec['power'], dtype=np.float32)
+            combined[f'picked_velocities_{tag}'] = np.asarray(spec['picked_velocities'], dtype=np.float32)
+
+            # Add method-specific metadata with suffix
+            for key, val in spec['metadata'].items():
+                if key not in ['method', 'offset', 'export_date', 'version']:
+                    combined[f'{key}_{tag}'] = val
+
+        # Save combined file
+        combined_file = os.path.join(outdir, f"combined_{method}_spectrum.npz")
+        np.savez_compressed(combined_file, **combined)
+        return combined_file
+
+    except Exception as e:
+        import warnings
+        warnings.warn(f"Could not create combined spectrum file: {e}")
         return None
 
 
