@@ -1,0 +1,487 @@
+"""Export functions for dispersion curves."""
+
+from __future__ import annotations
+
+import csv
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import numpy as np
+
+from ..processing.batch_processor import DispersionResult
+
+
+def export_dispersion_csv(
+    result: DispersionResult,
+    filepath: str,
+    include_header: bool = True
+) -> str:
+    """Export dispersion curve picks to CSV file.
+    
+    Parameters
+    ----------
+    result : DispersionResult
+        Dispersion analysis result
+    filepath : str
+        Output file path
+    include_header : bool
+        If True, include column headers
+    
+    Returns
+    -------
+    str
+        Path to exported file
+    """
+    Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+    
+    with open(filepath, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        
+        if include_header:
+            # Write metadata as comments
+            f.write(f"# Midpoint: {result.midpoint:.1f} m\n")
+            f.write(f"# Config: {result.subarray_config}\n")
+            f.write(f"# Shot: {result.shot_file}\n")
+            f.write(f"# Offset: {result.source_offset:.1f} m ({result.direction})\n")
+            f.write(f"# Method: {result.method}\n")
+            f.write(f"# Export date: {datetime.now().isoformat()}\n")
+            
+            writer.writerow(["Frequency_Hz", "PhaseVelocity_m_s", "Wavelength_m"])
+        
+        for freq, vel, wav in zip(
+            result.frequencies,
+            result.picked_velocities,
+            result.wavelengths
+        ):
+            if not np.isnan(vel):
+                writer.writerow([
+                    f"{freq:.4f}",
+                    f"{vel:.4f}",
+                    f"{wav:.4f}" if not np.isnan(wav) else ""
+                ])
+    
+    return filepath
+
+
+def export_dispersion_npz(
+    result: DispersionResult,
+    filepath: str
+) -> str:
+    """Export full dispersion spectrum and picks to NPZ file.
+    
+    Parameters
+    ----------
+    result : DispersionResult
+        Dispersion analysis result
+    filepath : str
+        Output file path
+    
+    Returns
+    -------
+    str
+        Path to exported file
+    """
+    Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+    
+    # Prepare metadata
+    data = {
+        'frequencies': np.asarray(result.frequencies, dtype=np.float32),
+        'velocities': np.asarray(result.velocities, dtype=np.float32),
+        'power': np.asarray(result.power, dtype=np.float32),
+        'picked_velocities': np.asarray(result.picked_velocities, dtype=np.float32),
+        'wavelengths': np.asarray(result.wavelengths, dtype=np.float32),
+        'midpoint': float(result.midpoint),
+        'subarray_config': str(result.subarray_config),
+        'shot_file': str(result.shot_file),
+        'source_offset': float(result.source_offset),
+        'direction': str(result.direction),
+        'method': str(result.method),
+        'export_date': datetime.now().isoformat(),
+        'version': '1.0'
+    }
+    
+    # Add metadata dict entries
+    for key, val in result.metadata.items():
+        if isinstance(val, (int, float, str, bool)):
+            data[f'meta_{key}'] = val
+        elif isinstance(val, (list, np.ndarray)):
+            data[f'meta_{key}'] = np.asarray(val, dtype=np.float32)
+    
+    np.savez_compressed(filepath, **data)
+    
+    return filepath
+
+
+def export_dispersion_image(
+    result: DispersionResult,
+    filepath: str,
+    max_velocity: Optional[float] = None,
+    max_frequency: Optional[float] = None,
+    cmap: str = "jet",
+    dpi: int = 150,
+    auto_velocity_limit: bool = True
+) -> str:
+    """Export dispersion spectrum as PNG image.
+    
+    Parameters
+    ----------
+    result : DispersionResult
+        Dispersion analysis result
+    filepath : str
+        Output file path (.png)
+    max_velocity : float, optional
+        Maximum velocity for plot axis. If None and auto_velocity_limit is True,
+        automatically determined from picked velocities.
+    max_frequency : float, optional
+        Maximum frequency for plot axis
+    cmap : str
+        Colormap name
+    dpi : int
+        Image resolution
+    auto_velocity_limit : bool
+        If True and max_velocity is None, automatically determine velocity limit
+        from picks (max pick velocity + 20% margin, rounded to nice number)
+    
+    Returns
+    -------
+    str
+        Path to exported file
+    """
+    import matplotlib
+    matplotlib.use('Agg')  # Non-interactive backend
+    import matplotlib.pyplot as plt
+    
+    Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+    
+    freqs = np.asarray(result.frequencies)
+    vels = np.asarray(result.velocities)
+    power = np.asarray(result.power)
+    picks = np.asarray(result.picked_velocities)
+    
+    if max_frequency is None:
+        max_frequency = freqs[-1] if len(freqs) > 0 else 100.0
+    
+    # Auto-determine max_velocity from picks if not specified
+    if max_velocity is None:
+        if auto_velocity_limit:
+            valid_picks = picks[~np.isnan(picks)]
+            if len(valid_picks) > 0:
+                max_pick = np.max(valid_picks)
+                # Add 20% margin and round to nice number
+                max_velocity = _round_to_nice_number(max_pick * 1.2)
+            else:
+                max_velocity = 1000.0  # Default fallback
+        else:
+            max_velocity = 5000.0  # Legacy default
+    
+    # Create uniform velocity grid for plotting
+    nv = 400
+    v_min = max_velocity / nv
+    vaxis = np.linspace(v_min, max_velocity, nv)
+    
+    # Interpolate power to uniform velocity grid
+    n_f = len(freqs)
+    P_vf = np.zeros((nv, n_f))
+    
+    for i in range(n_f):
+        if i < power.shape[1]:
+            P_vf[:, i] = np.interp(vaxis, vels, power[:, i], left=0.0, right=0.0)
+    
+    # Plot
+    fig, ax = plt.subplots(figsize=(8, 6))
+    X, Y = np.meshgrid(freqs, vaxis)
+    cf = ax.contourf(X, Y, P_vf, levels=30, cmap=cmap)
+    plt.colorbar(cf, ax=ax, label="Normalized Power")
+    
+    # Plot picks
+    valid_mask = ~np.isnan(picks)
+    ax.plot(freqs[valid_mask], picks[valid_mask], 'o', 
+            mfc='none', mec='white', ms=4, label="Picks")
+    
+    # Title with metadata
+    title = f"{result.method.upper()} Dispersion - Midpoint {result.midpoint:.1f}m"
+    subtitle = f"Config: {result.subarray_config}, Offset: {result.source_offset:.1f}m ({result.direction})"
+    ax.set_title(f"{title}\n{subtitle}", fontsize=10)
+    
+    ax.set_xlabel("Frequency (Hz)")
+    ax.set_ylabel("Phase Velocity (m/s)")
+    ax.set_xlim(0, max_frequency)
+    ax.set_ylim(0, max_velocity)
+    ax.grid(alpha=0.3)
+    ax.legend(loc='upper right')
+    
+    plt.tight_layout()
+    fig.savefig(filepath, dpi=dpi, bbox_inches='tight')
+    plt.close(fig)
+    
+    return filepath
+
+
+def _round_to_nice_number(value: float) -> float:
+    """Round a value up to a 'nice' number for axis limits.
+    
+    Nice numbers: 100, 200, 250, 300, 400, 500, 600, 750, 800, 1000, etc.
+    """
+    if value <= 0:
+        return 100.0
+    
+    # Find the order of magnitude
+    import math
+    magnitude = 10 ** math.floor(math.log10(value))
+    
+    # Normalized value (1-10 range)
+    normalized = value / magnitude
+    
+    # Round up to nice normalized values
+    nice_values = [1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 7.5, 8.0, 10.0]
+    
+    for nice in nice_values:
+        if normalized <= nice:
+            return nice * magnitude
+    
+    return 10.0 * magnitude
+
+
+def export_batch_csv(
+    results: List[DispersionResult],
+    filepath: str,
+    format: str = "long"
+) -> str:
+    """Export multiple dispersion curves to a single CSV.
+    
+    Parameters
+    ----------
+    results : list of DispersionResult
+        Dispersion results to export
+    filepath : str
+        Output file path
+    format : str
+        Format: 'long' (one row per point) or 'wide' (one column per curve)
+    
+    Returns
+    -------
+    str
+        Path to exported file
+    """
+    Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+    
+    if format == "long":
+        return _export_long_format(results, filepath)
+    else:
+        return _export_wide_format(results, filepath)
+
+
+def _export_long_format(
+    results: List[DispersionResult],
+    filepath: str
+) -> str:
+    """Export in long format (one row per frequency-velocity point)."""
+    with open(filepath, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "Midpoint_m",
+            "Config",
+            "Shot",
+            "Offset_m",
+            "Direction",
+            "Method",
+            "Frequency_Hz",
+            "Velocity_m_s",
+            "Wavelength_m"
+        ])
+        
+        for result in results:
+            shot_name = Path(result.shot_file).name
+            for freq, vel, wav in zip(
+                result.frequencies,
+                result.picked_velocities,
+                result.wavelengths
+            ):
+                if not np.isnan(vel):
+                    writer.writerow([
+                        f"{result.midpoint:.1f}",
+                        result.subarray_config,
+                        shot_name,
+                        f"{result.source_offset:.1f}",
+                        result.direction,
+                        result.method,
+                        f"{freq:.4f}",
+                        f"{vel:.4f}",
+                        f"{wav:.4f}" if not np.isnan(wav) else ""
+                    ])
+    
+    return filepath
+
+
+def _export_wide_format(
+    results: List[DispersionResult],
+    filepath: str
+) -> str:
+    """Export in wide format (one column per curve)."""
+    if not results:
+        return filepath
+    
+    # Find common frequency grid (use first result as reference)
+    ref_freqs = results[0].frequencies
+    
+    with open(filepath, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        
+        # Header row
+        header = ["Frequency_Hz"]
+        for r in results:
+            label = f"mid{r.midpoint:.0f}_{r.subarray_config}_{r.direction[:3]}"
+            header.append(f"Vel_{label}")
+        writer.writerow(header)
+        
+        # Data rows
+        for i, freq in enumerate(ref_freqs):
+            row = [f"{freq:.4f}"]
+            for r in results:
+                if i < len(r.picked_velocities):
+                    vel = r.picked_velocities[i]
+                    row.append(f"{vel:.4f}" if not np.isnan(vel) else "")
+                else:
+                    row.append("")
+            writer.writerow(row)
+    
+    return filepath
+
+
+def export_combined_npz(
+    results: List[DispersionResult],
+    filepath: str
+) -> str:
+    """Export all dispersion curves to a single combined NPZ file.
+    
+    This format is compatible with the refinement workflow.
+    
+    Parameters
+    ----------
+    results : list of DispersionResult
+        All dispersion results to combine
+    filepath : str
+        Output file path
+    
+    Returns
+    -------
+    str
+        Path to exported file
+    """
+    Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+    
+    if not results:
+        np.savez_compressed(filepath, n_curves=0)
+        return filepath
+    
+    # Collect all data
+    n_curves = len(results)
+    
+    # Use first result to determine array sizes
+    n_freq = len(results[0].frequencies)
+    n_vel = len(results[0].velocities)
+    
+    # Initialize arrays
+    all_frequencies = np.zeros((n_curves, n_freq), dtype=np.float32)
+    all_velocities = np.zeros((n_curves, n_vel), dtype=np.float32)
+    all_power = np.zeros((n_curves, n_vel, n_freq), dtype=np.float32)
+    all_picks = np.zeros((n_curves, n_freq), dtype=np.float32)
+    all_wavelengths = np.zeros((n_curves, n_freq), dtype=np.float32)
+    
+    # Metadata arrays
+    midpoints = np.zeros(n_curves, dtype=np.float32)
+    offsets = np.zeros(n_curves, dtype=np.float32)
+    configs = []
+    directions = []
+    shot_files = []
+    methods = []
+    
+    for i, result in enumerate(results):
+        # Handle variable array sizes
+        nf = min(n_freq, len(result.frequencies))
+        nv = min(n_vel, len(result.velocities))
+        
+        all_frequencies[i, :nf] = result.frequencies[:nf]
+        all_velocities[i, :nv] = result.velocities[:nv]
+        
+        power = np.asarray(result.power)
+        pv, pf = min(nv, power.shape[0]), min(nf, power.shape[1])
+        all_power[i, :pv, :pf] = power[:pv, :pf]
+        
+        all_picks[i, :nf] = result.picked_velocities[:nf]
+        all_wavelengths[i, :nf] = result.wavelengths[:nf]
+        
+        midpoints[i] = result.midpoint
+        offsets[i] = result.source_offset
+        configs.append(result.subarray_config)
+        directions.append(result.direction)
+        shot_files.append(Path(result.shot_file).name)
+        methods.append(result.method)
+    
+    # Save
+    np.savez_compressed(
+        filepath,
+        # Data arrays
+        frequencies=all_frequencies,
+        velocities=all_velocities,
+        power=all_power,
+        picked_velocities=all_picks,
+        wavelengths=all_wavelengths,
+        # Metadata arrays
+        midpoints=midpoints,
+        source_offsets=offsets,
+        configs=np.array(configs, dtype=object),
+        directions=np.array(directions, dtype=object),
+        shot_files=np.array(shot_files, dtype=object),
+        methods=np.array(methods, dtype=object),
+        # Scalar metadata
+        n_curves=n_curves,
+        n_frequencies=n_freq,
+        n_velocities=n_vel,
+        export_date=datetime.now().isoformat(),
+        version='1.0'
+    )
+    
+    return filepath
+
+
+def export_for_dinver(
+    result: DispersionResult,
+    filepath: str,
+    error_percent: float = 10.0
+) -> str:
+    """Export dispersion curve in format suitable for Dinver/Geopsy.
+    
+    Format: frequency velocity error
+    
+    Parameters
+    ----------
+    result : DispersionResult
+        Dispersion analysis result
+    filepath : str
+        Output file path
+    error_percent : float
+        Error as percentage of velocity (default: 10%)
+    
+    Returns
+    -------
+    str
+        Path to exported file
+    """
+    Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+    
+    with open(filepath, 'w', encoding='utf-8') as f:
+        # Dinver format header
+        f.write("# Dispersion curve for Dinver\n")
+        f.write(f"# Midpoint: {result.midpoint:.1f} m\n")
+        f.write(f"# Config: {result.subarray_config}\n")
+        f.write("# Format: frequency(Hz) slowness(s/m) error(s/m)\n")
+        f.write("# or: frequency(Hz) velocity(m/s) error(m/s)\n")
+        
+        for freq, vel in zip(result.frequencies, result.picked_velocities):
+            if not np.isnan(vel) and vel > 0:
+                error = vel * error_percent / 100.0
+                f.write(f"{freq:.6f} {vel:.6f} {error:.6f}\n")
+    
+    return filepath

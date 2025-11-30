@@ -31,28 +31,66 @@ def fk_transform(data, dt, dx, fmin=0.0, fmax=100.0, numk=4000):
     return freq_sub, ktrial, power_fk
 
 
-def analyze_fk_spectrum(freq_sub, ktrial, power_fk, normalization="frequency-maximum", tol=0.0):
+def analyze_fk_spectrum(freq_sub, ktrial, power_fk, normalization="frequency-maximum", tol=0.0, power_threshold=0.1, velocity_min=50.0, velocity_max=5000.0):
+    """Analyze FK spectrum and pick dispersion curve.
+    
+    Parameters
+    ----------
+    power_threshold : float
+        Minimum normalized power to consider a valid pick (0-1). 
+        Frequencies with max power below this fraction of the global maximum are set to NaN.
+    velocity_min : float
+        Minimum valid velocity (m/s). Picks below this are set to NaN.
+    velocity_max : float
+        Maximum valid velocity (m/s). Picks above this are set to NaN.
+    """
     import numpy as np
     if freq_sub[0] == 0:
         freq_sub = freq_sub[1:]
         power_fk = power_fk[:, 1:]
+    
+    # Store raw power for threshold check BEFORE normalization
+    raw_power = np.abs(power_fk)
+    global_max_power = np.max(raw_power) if np.max(raw_power) > 0 else 1.0
+    max_power_per_freq = np.max(raw_power, axis=0)  # Max power at each frequency
+    
+    # Normalize for display
     if normalization == "none":
-        pnorm = np.abs(power_fk)
+        pnorm = raw_power
     elif normalization == "absolute-maximum":
-        fac = np.max(np.abs(power_fk)) or 1.0
-        pnorm = np.abs(power_fk) / fac
-    else:
-        fac = np.max(np.abs(power_fk), axis=0)
+        pnorm = raw_power / global_max_power
+    else:  # frequency-maximum
+        fac = max_power_per_freq.copy()
         fac[fac == 0] = 1.0
-        pnorm = np.abs(power_fk) / fac
-    kmax = ktrial[np.argmax(pnorm, axis=0)]
+        pnorm = raw_power / fac
+    
+    # Find peaks
+    kmax_idx = np.argmax(pnorm, axis=0)
+    kmax = ktrial[kmax_idx].copy()
+    
+    # Check power at picked locations using RAW power relative to global max
+    # This identifies frequencies where there's genuinely little signal
+    normalized_freq_power = max_power_per_freq / global_max_power
+    low_power_mask = normalized_freq_power < power_threshold
+    kmax[low_power_mask] = np.nan
     kmax[kmax == 0] = np.nan
+    
     omega = 2 * np.pi * freq_sub
     vmax = omega / kmax
+    
+    # Apply velocity range filter
+    vmax[(vmax < velocity_min) | (vmax > velocity_max)] = np.nan
+    
     if tol > 0 and len(vmax) > 1:
-        dv_min = tol * (omega[0]/ktrial[1] - omega[0]/ktrial[0])
+        # Safe division - avoid ktrial[0] if it's 0
+        if ktrial[1] > 0:
+            dv_min = tol * (omega[0]/ktrial[1] - omega[0]/max(ktrial[0], 1e-10))
+        else:
+            dv_min = 0
         last = None
         for i, v in enumerate(vmax):
+            if np.isnan(v):
+                continue
             if last is not None and abs(v-last) < dv_min:
                 vmax[i] = np.nan
             else:

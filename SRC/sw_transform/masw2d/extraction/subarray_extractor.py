@@ -1,0 +1,280 @@
+"""Extract sub-array data from shot gathers.
+
+Implements Method A: Sub-array extraction from fixed array data.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import List, Optional
+
+import numpy as np
+
+from ..geometry.subarray import SubArrayDef
+from ..geometry.shot_classifier import ShotInfo, ShotType
+from ..geometry.midpoint import calculate_source_offset, is_valid_offset
+
+
+@dataclass
+class ExtractedSubArray:
+    """Extracted sub-array data with metadata.
+    
+    Attributes
+    ----------
+    data : np.ndarray
+        Time-domain data, shape (n_samples, n_channels)
+    time : np.ndarray
+        Time vector in seconds
+    dt : float
+        Sampling interval in seconds
+    dx : float
+        Geophone spacing in meters
+    subarray_def : SubArrayDef
+        Sub-array definition
+    shot_info : ShotInfo
+        Shot information
+    source_offset : float
+        Calculated source offset in meters
+    direction : str
+        Propagation direction: "forward" or "reverse"
+    """
+    data: np.ndarray
+    time: np.ndarray
+    dt: float
+    dx: float
+    subarray_def: SubArrayDef
+    shot_info: ShotInfo
+    source_offset: float
+    direction: str
+    
+    @property
+    def n_samples(self) -> int:
+        """Number of time samples."""
+        return self.data.shape[0]
+    
+    @property
+    def n_channels(self) -> int:
+        """Number of channels in sub-array."""
+        return self.data.shape[1]
+    
+    @property
+    def midpoint(self) -> float:
+        """Midpoint position of this sub-array."""
+        return self.subarray_def.midpoint
+    
+    @property
+    def config_name(self) -> str:
+        """Name of the sub-array configuration."""
+        return self.subarray_def.config_name
+    
+    def __repr__(self) -> str:
+        return (f"ExtractedSubArray(midpoint={self.midpoint:.1f}m, "
+                f"offset={self.source_offset:.1f}m, "
+                f"dir='{self.direction}', config='{self.config_name}')")
+
+
+def extract_subarray(
+    shot_data: np.ndarray,
+    time: np.ndarray,
+    dt: float,
+    dx: float,
+    subarray_def: SubArrayDef,
+    shot_info: ShotInfo,
+    reverse_if_needed: bool = True
+) -> ExtractedSubArray:
+    """Extract sub-array from shot gather.
+    
+    Parameters
+    ----------
+    shot_data : np.ndarray
+        Full shot gather, shape (n_samples, n_total_channels)
+    time : np.ndarray
+        Time vector
+    dt : float
+        Sampling interval
+    dx : float
+        Geophone spacing
+    subarray_def : SubArrayDef
+        Sub-array definition
+    shot_info : ShotInfo
+        Shot information
+    reverse_if_needed : bool
+        If True, flip channel order for reverse shots so that
+        channel 0 is always nearest to the (effective) source
+    
+    Returns
+    -------
+    ExtractedSubArray
+        Extracted data with metadata
+    
+    Raises
+    ------
+    ValueError
+        If shot is interior (not supported)
+    IndexError
+        If sub-array channels are out of bounds
+    """
+    # Calculate offset first to validate shot type
+    offset, direction = calculate_source_offset(shot_info, subarray_def)
+    
+    # Extract channels
+    start_ch = subarray_def.start_channel
+    end_ch = subarray_def.end_channel
+    
+    if end_ch > shot_data.shape[1]:
+        raise IndexError(
+            f"Sub-array channels ({start_ch}-{end_ch-1}) exceed "
+            f"data channels (0-{shot_data.shape[1]-1})"
+        )
+    
+    sub_data = shot_data[:, start_ch:end_ch].copy()
+    
+    # Flip channel order for FORWARD shots (source on LEFT side)
+    # For FK/PS methods, data must be arranged so wave propagates from 
+    # low channel index to high channel index (left to right in array)
+    # - Forward shots (source left): channels are already in correct order
+    #   but FK/PS expect flip, so we flip here
+    # - Reverse shots (source right): channels naturally reversed, no flip needed
+    # This matches the main package's compute_reverse_flag logic
+    if reverse_if_needed and direction == "forward":
+        sub_data = np.fliplr(sub_data)
+    
+    return ExtractedSubArray(
+        data=sub_data,
+        time=time.copy(),
+        dt=dt,
+        dx=dx,
+        subarray_def=subarray_def,
+        shot_info=shot_info,
+        source_offset=offset,
+        direction=direction
+    )
+
+
+def extract_all_subarrays_from_shot(
+    shot_data: np.ndarray,
+    time: np.ndarray,
+    dt: float,
+    dx: float,
+    shot_info: ShotInfo,
+    subarray_defs: List[SubArrayDef],
+    min_offset_ratio: float = 0.0,
+    max_offset_ratio: float = 10.0,
+    reverse_if_needed: bool = True
+) -> List[ExtractedSubArray]:
+    """Extract all valid sub-arrays from a single shot.
+    
+    Optionally filters by offset quality.
+    
+    Parameters
+    ----------
+    shot_data : np.ndarray
+        Full shot gather, shape (n_samples, n_total_channels)
+    time : np.ndarray
+        Time vector
+    dt : float
+        Sampling interval
+    dx : float
+        Geophone spacing
+    shot_info : ShotInfo
+        Shot information
+    subarray_defs : list of SubArrayDef
+        Sub-array definitions to extract
+    min_offset_ratio : float
+        Minimum acceptable offset/length ratio (default: 0.0 = no minimum)
+    max_offset_ratio : float
+        Maximum acceptable offset/length ratio (default: 10.0 = no practical maximum)
+    reverse_if_needed : bool
+        If True, flip channel order for reverse shots
+    
+    Returns
+    -------
+    list of ExtractedSubArray
+        Successfully extracted sub-arrays (filtered by offset if specified)
+    
+    Notes
+    -----
+    Interior shots are automatically skipped with a warning.
+    """
+    results = []
+    
+    for sa_def in subarray_defs:
+        try:
+            extracted = extract_subarray(
+                shot_data, time, dt, dx, sa_def, shot_info,
+                reverse_if_needed=reverse_if_needed
+            )
+            
+            # Check offset quality if filtering is enabled
+            if min_offset_ratio > 0 or max_offset_ratio < 10.0:
+                if not is_valid_offset(
+                    extracted.source_offset,
+                    sa_def.length,
+                    min_ratio=min_offset_ratio,
+                    max_ratio=max_offset_ratio
+                ):
+                    continue
+            
+            results.append(extracted)
+            
+        except ValueError:
+            # Skip interior shots silently
+            continue
+        except IndexError as e:
+            # Log but continue with other sub-arrays
+            import warnings
+            warnings.warn(f"Could not extract sub-array: {e}")
+            continue
+    
+    return results
+
+
+def load_and_extract_from_file(
+    file_path: str,
+    shot_info: ShotInfo,
+    subarray_defs: List[SubArrayDef],
+    dx: float,
+    min_offset_ratio: float = 0.0,
+    max_offset_ratio: float = 10.0,
+    reverse_if_needed: bool = True
+) -> List[ExtractedSubArray]:
+    """Load shot data from file and extract all sub-arrays.
+    
+    Convenience function that combines file loading and extraction.
+    
+    Parameters
+    ----------
+    file_path : str
+        Path to SEG-2 file
+    shot_info : ShotInfo
+        Shot information (must have matching file path)
+    subarray_defs : list of SubArrayDef
+        Sub-array definitions
+    dx : float
+        Geophone spacing (used to verify against file)
+    min_offset_ratio : float
+        Minimum offset/length ratio filter
+    max_offset_ratio : float
+        Maximum offset/length ratio filter
+    reverse_if_needed : bool
+        If True, flip channels for reverse shots
+    
+    Returns
+    -------
+    list of ExtractedSubArray
+        Extracted sub-arrays
+    """
+    from sw_transform.processing.seg2 import load_seg2_ar
+    
+    time, data, _, file_dx, dt, _ = load_seg2_ar(file_path)
+    
+    # Use dx from file if available and close to config dx
+    actual_dx = file_dx if file_dx > 0 else dx
+    
+    return extract_all_subarrays_from_shot(
+        data, time, dt, actual_dx,
+        shot_info, subarray_defs,
+        min_offset_ratio=min_offset_ratio,
+        max_offset_ratio=max_offset_ratio,
+        reverse_if_needed=reverse_if_needed
+    )
