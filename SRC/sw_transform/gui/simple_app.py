@@ -60,11 +60,19 @@ class SimpleMASWGUI:
 
         # state
         self.file_list: list[str] = []
+        self.file_types: dict[str, str] = {}  # base -> 'seg2' or 'mat'
         self.offsets: dict[str, str] = {}
         self.reverse_flags: dict[str, bool] = {}
         self.output_folder: str = ""
         self.method_key = tk.StringVar(value="fk")
         self.vibrosis_mode = tk.BooleanVar(value=False)  # False=hammer, True=vibrosis
+        self.cylindrical_var = tk.BooleanVar(value=False)  # Cylindrical steering for FDBF
+        
+        # Vibrosis .mat file array configuration
+        self.dx_var = tk.StringVar(value="2.0")  # Sensor spacing (m) for .mat files
+        
+        # Auto-link: when vibrosis is checked, auto-check cylindrical
+        self.vibrosis_mode.trace_add('write', self._on_vibrosis_changed)
 
         # inputs
         self.vmin_var = tk.StringVar(value="0"); self.vmax_var = tk.StringVar(value="5000")
@@ -78,6 +86,48 @@ class SimpleMASWGUI:
         self.figure_topic_var = tk.StringVar(value="3-D Dispersion (Freq vs. Velocity)")
         self.ppt_var = tk.BooleanVar(value=False)
         self.export_spectra_var = tk.BooleanVar(value=True)  # Default ON for spectrum export
+        self.parallel_var = tk.BooleanVar(value=True)  # Enable parallel processing by default
+        self.worker_count_var = tk.StringVar(value="auto")  # "auto" or specific number
+        
+        # === Advanced Settings Variables ===
+        # Default values (used for reset)
+        self._DEFAULTS = {
+            'grid_fk': '4000',
+            'tol_fk': '0',
+            'grid_ps': '1200',
+            'vspace_ps': 'log',
+            'tol_ps': '0',
+            'vibrosis': False,
+            'cylindrical': False,
+            'downsample': True,
+            'down_factor': '16',
+            'numf': '4000',
+            'power_threshold': '0.1',
+            'auto_vel_limits': True,
+            'auto_freq_limits': True,
+            'plot_min_vel': '0',
+            'plot_max_vel': '2000',
+            'plot_min_freq': '0',
+            'plot_max_freq': '100',
+            'freq_tick_spacing': 'auto',
+            'vel_tick_spacing': 'auto',
+            'cmap': 'jet',
+            'dpi': '200',
+            'export_spectra': True,
+            'dx': '2.0'  # Sensor spacing for vibrosis .mat files
+        }
+        
+        # New variables for advanced settings
+        self.power_threshold_var = tk.StringVar(value=self._DEFAULTS['power_threshold'])
+        self.auto_vel_limits_var = tk.BooleanVar(value=self._DEFAULTS['auto_vel_limits'])
+        self.auto_freq_limits_var = tk.BooleanVar(value=self._DEFAULTS['auto_freq_limits'])
+        self.plot_min_vel_var = tk.StringVar(value=self._DEFAULTS['plot_min_vel'])
+        self.plot_max_vel_var = tk.StringVar(value=self._DEFAULTS['plot_max_vel'])
+        self.plot_min_freq_var = tk.StringVar(value=self._DEFAULTS['plot_min_freq'])
+        self.plot_max_freq_var = tk.StringVar(value=self._DEFAULTS['plot_max_freq'])
+        self.freq_tick_spacing_var = tk.StringVar(value=self._DEFAULTS['freq_tick_spacing'])
+        self.vel_tick_spacing_var = tk.StringVar(value=self._DEFAULTS['vel_tick_spacing'])
+        self.cmap_var = tk.StringVar(value=self._DEFAULTS['cmap'])
 
         self._build_menu()
         self._build_ui()
@@ -86,7 +136,8 @@ class SimpleMASWGUI:
     def _build_menu(self):
         m = tk.Menu(self.root)
         filem = tk.Menu(m, tearoff=0)
-        filem.add_command(label="Open SEG-2...", command=self.select_files)
+        filem.add_command(label="Open Data Files...", command=self.select_files)
+        filem.add_command(label="Open Vibrosis .MAT...", command=self.select_mat_files)
         filem.add_command(label="Select Output Folder...", command=self.select_out)
         filem.add_separator(); filem.add_command(label="Exit", command=self.root.quit)
         m.add_cascade(label="File", menu=filem)
@@ -100,13 +151,13 @@ class SimpleMASWGUI:
     def _build_ui(self):
         left = tk.Frame(self.root, width=320); left.pack(side="left", fill="y")
         # Left toolbar with icon
-        btn_open = tk.Button(left, text=" Open SEG-2...", command=self.select_files, compound="left", padx=6, pady=4)
+        btn_open = tk.Button(left, text=" Open Data...", command=self.select_files, compound="left", padx=6, pady=4)
         ico = self._load_icon("ic_open.png", 32)
         if ico is not None:
             btn_open.config(image=ico)
         btn_open.pack(anchor="w", padx=8, pady=6)
-        self.tree = ttk.Treeview(left, columns=("file","offset","rev"), show="headings", height=24)
-        for col, w in zip(("file","offset","rev"), (220, 70, 40)):
+        self.tree = ttk.Treeview(left, columns=("file","type","offset","rev"), show="headings", height=24)
+        for col, w in zip(("file","type","offset","rev"), (180, 40, 60, 40)):
             self.tree.heading(col, text=col.capitalize()); self.tree.column(col, width=w)
         self.tree.pack(fill="y", padx=8, pady=4, expand=True)
         self.tree.bind("<Double-1>", self._edit_cell)
@@ -115,6 +166,14 @@ class SimpleMASWGUI:
         nb = ttk.Notebook(center)
         self.tab_inputs = tk.Frame(nb); self.tab_run = tk.Frame(nb); self.tab_fig = tk.Frame(nb)
         nb.add(self.tab_inputs, text="Inputs"); nb.add(self.tab_run, text="Run"); nb.add(self.tab_fig, text="Figures")
+        
+        # Add MASW 2D tab
+        try:
+            from sw_transform.gui.masw2d_tab import create_masw2d_tab
+            self.masw2d_tab = create_masw2d_tab(nb, log_callback=None, main_app=self)
+        except ImportError:
+            pass  # MASW 2D module not available
+        
         nb.pack(fill="both", expand=True)
 
         # Inputs
@@ -125,35 +184,34 @@ class SimpleMASWGUI:
         tk.Label(row, textvariable=self.out_var, anchor="w").pack(side="left", fill="x", expand=True, padx=6)
         tk.Button(row, text="Select", command=self.select_out).pack(side="left")
 
-        box = tk.LabelFrame(p, text="Picker limits"); box.pack(fill="x", padx=6, pady=4)
-        for lab, var in (("Vmin", self.vmin_var), ("Vmax", self.vmax_var), ("Fmin", self.fmin_var), ("Fmax", self.fmax_var)):
-            tk.Label(box, text=lab).pack(side="left"); tk.Entry(box, width=6, textvariable=var).pack(side="left", padx=3)
+        # Processing Limits (simplified)
+        limits_box = tk.LabelFrame(p, text="Processing Limits"); limits_box.pack(fill="x", padx=6, pady=4)
+        lim_row1 = tk.Frame(limits_box); lim_row1.pack(fill="x", pady=2)
+        tk.Label(lim_row1, text="Velocity:").pack(side="left")
+        tk.Entry(lim_row1, width=6, textvariable=self.vmin_var).pack(side="left", padx=2)
+        tk.Label(lim_row1, text="-").pack(side="left")
+        tk.Entry(lim_row1, width=6, textvariable=self.vmax_var).pack(side="left", padx=2)
+        tk.Label(lim_row1, text="m/s").pack(side="left", padx=(0, 12))
+        tk.Label(lim_row1, text="Frequency:").pack(side="left")
+        tk.Entry(lim_row1, width=6, textvariable=self.fmin_var).pack(side="left", padx=2)
+        tk.Label(lim_row1, text="-").pack(side="left")
+        tk.Entry(lim_row1, width=6, textvariable=self.fmax_var).pack(side="left", padx=2)
+        tk.Label(lim_row1, text="Hz").pack(side="left")
+        
+        lim_row2 = tk.Frame(limits_box); lim_row2.pack(fill="x", pady=2)
+        tk.Label(lim_row2, text="Time Window:").pack(side="left")
+        tk.Entry(lim_row2, width=6, textvariable=self.time_start_var).pack(side="left", padx=2)
+        tk.Label(lim_row2, text="-").pack(side="left")
+        tk.Entry(lim_row2, width=6, textvariable=self.time_end_var).pack(side="left", padx=2)
+        tk.Label(lim_row2, text="sec").pack(side="left")
 
-        tw = tk.LabelFrame(p, text="Time window & sampling"); tw.pack(fill="x", padx=6, pady=4)
-        tk.Label(tw, text="Start (s)").pack(side="left"); tk.Entry(tw, width=6, textvariable=self.time_start_var).pack(side="left", padx=3)
-        tk.Label(tw, text="End (s)").pack(side="left"); tk.Entry(tw, width=6, textvariable=self.time_end_var).pack(side="left", padx=3)
-        tk.Checkbutton(tw, text="Downsample", variable=self.downsample_var).pack(side="left", padx=6)
-        tk.Label(tw, text="Factor").pack(side="left"); tk.Entry(tw, width=4, textvariable=self.down_factor_var).pack(side="left", padx=3)
-        tk.Label(tw, text="numf").pack(side="left"); tk.Entry(tw, width=6, textvariable=self.numf_var).pack(side="left", padx=3)
+        # Topic / Title
+        topic_box = tk.LabelFrame(p, text="Figure Title"); topic_box.pack(fill="x", padx=6, pady=4)
+        tk.Entry(topic_box, textvariable=self.figure_topic_var, width=50).pack(fill="x", padx=4, pady=4)
 
-        pm = tk.LabelFrame(p, text="Per-method settings"); pm.pack(fill="x", padx=6, pady=4)
-        fk = tk.Frame(pm); fk.pack(fill="x", pady=2)
-        tk.Label(fk, text="FK/FDBF N").pack(side="left"); tk.Entry(fk, width=6, textvariable=self.grid_fk_var).pack(side="left", padx=4)
-        tk.Label(fk, text="tol").pack(side="left"); tk.Entry(fk, width=6, textvariable=self.tol_fk_var).pack(side="left", padx=4)
-        # Vibrosis checkbox positioned after tolerance field
-        tk.Checkbutton(fk, text="Vibrosis (FDBF)", variable=self.vibrosis_mode).pack(side="left", padx=(20, 0))
-        ps = tk.Frame(pm); ps.pack(fill="x", pady=2)
-        tk.Label(ps, text="PS/SS N").pack(side="left"); tk.Entry(ps, width=6, textvariable=self.grid_ps_var).pack(side="left", padx=4)
-        tk.Label(ps, text="vspace").pack(side="left")
-        ttk.Combobox(ps, values=("linear","log"), width=6, textvariable=self.vspace_ps_var, state="readonly").pack(side="left", padx=4)
-        tk.Label(ps, text="tol").pack(side="left"); tk.Entry(ps, width=6, textvariable=self.tol_ps_var).pack(side="left", padx=4)
-
-        figbox = tk.LabelFrame(p, text="Figure / Export"); figbox.pack(fill="x", padx=6, pady=4)
-        row1 = tk.Frame(figbox); row1.pack(fill="x", pady=2)
-        tk.Label(row1, text="Figure DPI").pack(side="left"); tk.Entry(row1, width=6, textvariable=self.dpi_var).pack(side="left", padx=4)
-        tk.Label(row1, text="Topic").pack(side="left", padx=(12,2)); tk.Entry(row1, width=36, textvariable=self.figure_topic_var).pack(side="left", padx=2)
-        row2 = tk.Frame(figbox); row2.pack(fill="x", pady=2)
-        tk.Checkbutton(row2, text="Export power spectra (.npz)", variable=self.export_spectra_var).pack(side="left")
+        # Advanced Settings button
+        adv_row = tk.Frame(p); adv_row.pack(fill="x", padx=6, pady=4)
+        tk.Button(adv_row, text="\u2699 Advanced Settings...", command=self._open_advanced_settings).pack(side="left")
 
         # Array preview (embedded)
         arr_box = tk.LabelFrame(p, text="Array preview (embedded)")
@@ -161,7 +219,7 @@ class SimpleMASWGUI:
         topbar = tk.Frame(arr_box); topbar.pack(fill="x", pady=(2,4))
         tk.Button(topbar, text="Preview Array / Waterfall", command=self.preview_array).pack(side="left")
         tk.Label(topbar, text="Display time (s):").pack(side="left", padx=(10,2))
-        self.display_time_var = tk.StringVar(value="")
+        self.display_time_var = tk.StringVar(value="1")
         tk.Entry(topbar, width=6, textvariable=self.display_time_var).pack(side="left")
         self.prev_host = tk.Frame(arr_box, height=300, bg="#f7f7f7"); self.prev_host.pack(fill="both", expand=True)
         self.prev_canvas_widget = None
@@ -189,6 +247,16 @@ class SimpleMASWGUI:
         btn_cmp_sel.pack(side="left", padx=4); btn_cmp_all.pack(side="left", padx=4)
         opt = tk.Frame(r); opt.pack(pady=2)
         tk.Checkbutton(opt, text="Create PowerPoint after run", variable=self.ppt_var).pack(side="left")
+        tk.Checkbutton(opt, text="Parallel processing", variable=self.parallel_var).pack(side="left", padx=(16, 0))
+        # Worker count control
+        tk.Label(opt, text="Workers:").pack(side="left", padx=(8, 2))
+        import multiprocessing
+        max_cpu = multiprocessing.cpu_count()
+        worker_combo = ttk.Combobox(opt, textvariable=self.worker_count_var, 
+                                     values=["auto"] + [str(i) for i in range(1, max_cpu + 1)],
+                                     width=5, state="readonly")
+        worker_combo.pack(side="left")
+        tk.Label(opt, text=f"(max {max_cpu})", fg="gray").pack(side="left", padx=(2, 0))
         # Log box
         try:
             from tkinter import scrolledtext
@@ -255,34 +323,346 @@ class SimpleMASWGUI:
 
     # actions
     def select_files(self):
-        files = filedialog.askopenfilenames(title="Select SEG-2 Files", filetypes=[("SEG-2 .dat","*.dat"),("All files","*.*")])
+        """Open file dialog for SEG-2 (.dat) and vibrosis (.mat) files."""
+        files = filedialog.askopenfilenames(
+            title="Select Data Files",
+            filetypes=[
+                ("All supported", "*.dat *.mat"),
+                ("SEG-2 .dat", "*.dat"),
+                ("Vibrosis .mat", "*.mat"),
+                ("All files", "*.*")
+            ]
+        )
         if not files:
             return
-        self.file_list = list(files)
-        bases = [os.path.splitext(os.path.basename(f))[0] for f in files]
-        self.offsets = {b: "+0" for b in bases}; self.reverse_flags = {b: False for b in bases}
+        self._add_files_to_list(files)
+    
+    def select_mat_files(self):
+        """Open file dialog specifically for vibrosis .mat files."""
+        files = filedialog.askopenfilenames(
+            title="Select Vibrosis .MAT Files",
+            filetypes=[("Vibrosis .mat", "*.mat"), ("All files", "*.*")]
+        )
+        if not files:
+            return
+        self._add_files_to_list(files)
+    
+    def _add_files_to_list(self, files: tuple | list):
+        """Add files to the file list, detecting type and auto-configuring.
+        
+        Supports mixed mode: both .dat (SEG-2) and .mat (vibrosis) files.
+        """
+        new_files = list(files)
+        
+        # Extend existing lists (mixed mode)
+        self.file_list.extend(new_files)
+        
+        # Process each new file
+        for f in new_files:
+            base = os.path.splitext(os.path.basename(f))[0]
+            ext = os.path.splitext(f)[1].lower()
+            
+            if ext == '.mat':
+                # Vibrosis .mat file
+                self.file_types[base] = 'mat'
+                self.reverse_flags[base] = False
+                
+                # Try to detect array info and parse offset
+                try:
+                    from sw_transform.processing.vibrosis import get_vibrosis_file_info
+                    info = get_vibrosis_file_info(f)
+                    parsed_offset = info.get('parsed_offset')
+                    if parsed_offset is not None:
+                        sign = "+" if parsed_offset >= 0 else ""
+                        self.offsets[base] = f"{sign}{int(round(parsed_offset))}"
+                    else:
+                        self.offsets[base] = "+0"
+                except Exception:
+                    self.offsets[base] = "+0"
+            else:
+                # SEG-2 .dat file
+                self.file_types[base] = 'seg2'
+                self.offsets[base] = "+0"
+                self.reverse_flags[base] = False
+        
+        # Refresh tree view
+        self._refresh_file_tree()
+        
+        # Auto-enable vibrosis mode if any .mat files loaded
+        has_mat = any(t == 'mat' for t in self.file_types.values())
+        if has_mat:
+            self.vibrosis_mode.set(True)
+    
+    def _refresh_file_tree(self):
+        """Refresh the file tree view with current file list."""
         self.tree.delete(*self.tree.get_children())
-        for b in bases:
-            self.tree.insert("", "end", values=(b, "+0", "☐"))
+        for f in self.file_list:
+            base = os.path.splitext(os.path.basename(f))[0]
+            ftype = self.file_types.get(base, 'seg2')
+            offset = self.offsets.get(base, '+0')
+            rev = self.reverse_flags.get(base, False)
+            type_label = "MAT" if ftype == 'mat' else "SEG2"
+            rev_label = "☑" if rev else "☐"
+            self.tree.insert("", "end", values=(base, type_label, offset, rev_label))
 
     def select_out(self):
         folder = filedialog.askdirectory(title="Choose output folder")
         if folder:
             self.output_folder = folder; self.out_var.set(folder)
 
+    def _on_vibrosis_changed(self, *args):
+        """Auto-check cylindrical when vibrosis is enabled."""
+        if self.vibrosis_mode.get():
+            self.cylindrical_var.set(True)
+    
+    def _reset_advanced_defaults(self):
+        """Reset all advanced settings to default values."""
+        self.grid_fk_var.set(self._DEFAULTS['grid_fk'])
+        self.tol_fk_var.set(self._DEFAULTS['tol_fk'])
+        self.grid_ps_var.set(self._DEFAULTS['grid_ps'])
+        self.vspace_ps_var.set(self._DEFAULTS['vspace_ps'])
+        self.tol_ps_var.set(self._DEFAULTS['tol_ps'])
+        self.vibrosis_mode.set(self._DEFAULTS['vibrosis'])
+        self.cylindrical_var.set(self._DEFAULTS['cylindrical'])
+        self.downsample_var.set(self._DEFAULTS['downsample'])
+        self.down_factor_var.set(self._DEFAULTS['down_factor'])
+        self.numf_var.set(self._DEFAULTS['numf'])
+        self.power_threshold_var.set(self._DEFAULTS['power_threshold'])
+        self.auto_vel_limits_var.set(self._DEFAULTS['auto_vel_limits'])
+        self.auto_freq_limits_var.set(self._DEFAULTS['auto_freq_limits'])
+        self.plot_min_vel_var.set(self._DEFAULTS['plot_min_vel'])
+        self.plot_max_vel_var.set(self._DEFAULTS['plot_max_vel'])
+        self.plot_min_freq_var.set(self._DEFAULTS['plot_min_freq'])
+        self.plot_max_freq_var.set(self._DEFAULTS['plot_max_freq'])
+        self.freq_tick_spacing_var.set(self._DEFAULTS['freq_tick_spacing'])
+        self.vel_tick_spacing_var.set(self._DEFAULTS['vel_tick_spacing'])
+        self.cmap_var.set(self._DEFAULTS['cmap'])
+        self.dpi_var.set(self._DEFAULTS['dpi'])
+        self.export_spectra_var.set(self._DEFAULTS['export_spectra'])
+        self.dx_var.set(self._DEFAULTS['dx'])
+        self._toggle_vel_limits()
+        self._toggle_freq_limits()
+    
+    def _toggle_vel_limits(self):
+        """Enable/disable velocity limit entries based on auto-limit checkbox."""
+        state = 'disabled' if self.auto_vel_limits_var.get() else 'normal'
+        if hasattr(self, 'plot_min_vel_entry'):
+            self.plot_min_vel_entry.config(state=state)
+            self.plot_max_vel_entry.config(state=state)
+    
+    def _toggle_freq_limits(self):
+        """Enable/disable frequency limit entries based on auto-limit checkbox."""
+        state = 'disabled' if self.auto_freq_limits_var.get() else 'normal'
+        if hasattr(self, 'plot_min_freq_entry'):
+            self.plot_min_freq_entry.config(state=state)
+            self.plot_max_freq_entry.config(state=state)
+
+    def _open_advanced_settings(self):
+        """Open the advanced settings popup window."""
+        popup = tk.Toplevel(self.root)
+        popup.title("Advanced Settings")
+        popup.geometry("480x520")
+        popup.resizable(True, True)
+        popup.transient(self.root)
+        popup.grab_set()
+        
+        # Main scrollable frame
+        canvas = tk.Canvas(popup, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(popup, orient="vertical", command=canvas.yview)
+        scrollable = tk.Frame(canvas)
+        
+        scrollable.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scrollable, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True, padx=5, pady=5)
+        
+        # ===== Transform Settings =====
+        transform_frame = tk.LabelFrame(scrollable, text="Transform Settings", padx=8, pady=8)
+        transform_frame.pack(fill="x", padx=8, pady=6)
+        
+        # FK/FDBF row
+        fk_row = tk.Frame(transform_frame); fk_row.pack(fill="x", pady=3)
+        tk.Label(fk_row, text="FK/FDBF Grid Size:", width=16, anchor="w").pack(side="left")
+        ttk.Combobox(fk_row, textvariable=self.grid_fk_var,
+                     values=["500", "1000", "2000", "4000", "8000"],
+                     width=8).pack(side="left", padx=4)
+        tk.Label(fk_row, text="Tolerance:").pack(side="left", padx=(12, 0))
+        tk.Entry(fk_row, textvariable=self.tol_fk_var, width=8).pack(side="left", padx=4)
+        
+        # PS/SS row
+        ps_row = tk.Frame(transform_frame); ps_row.pack(fill="x", pady=3)
+        tk.Label(ps_row, text="PS/SS Grid Size:", width=16, anchor="w").pack(side="left")
+        ttk.Combobox(ps_row, textvariable=self.grid_ps_var,
+                     values=["500", "1000", "1200", "2000", "4000", "8000"],
+                     width=8).pack(side="left", padx=4)
+        tk.Label(ps_row, text="Tolerance:").pack(side="left", padx=(12, 0))
+        tk.Entry(ps_row, textvariable=self.tol_ps_var, width=8).pack(side="left", padx=4)
+        
+        # PS/SS spacing row
+        sp_row = tk.Frame(transform_frame); sp_row.pack(fill="x", pady=3)
+        tk.Label(sp_row, text="PS/SS Spacing:", width=16, anchor="w").pack(side="left")
+        ttk.Combobox(sp_row, textvariable=self.vspace_ps_var,
+                     values=["log", "linear"], width=8, state="readonly").pack(side="left", padx=4)
+        
+        # Vibrosis mode
+        vib_row = tk.Frame(transform_frame); vib_row.pack(fill="x", pady=3)
+        tk.Checkbutton(vib_row, text="Vibrosis mode (FDBF weighting)", 
+                       variable=self.vibrosis_mode).pack(side="left")
+        
+        # Cylindrical steering
+        cyl_row = tk.Frame(transform_frame); cyl_row.pack(fill="x", pady=3)
+        tk.Checkbutton(cyl_row, text="Cylindrical steering (FDBF near-field)", 
+                       variable=self.cylindrical_var).pack(side="left")
+        
+        # ===== Vibrosis Array Settings =====
+        vib_array_frame = tk.LabelFrame(scrollable, text="Vibrosis Array Config (.mat files)", padx=8, pady=8)
+        vib_array_frame.pack(fill="x", padx=8, pady=6)
+        
+        # Sensor spacing (dx)
+        dx_row = tk.Frame(vib_array_frame); dx_row.pack(fill="x", pady=3)
+        tk.Label(dx_row, text="Sensor Spacing (dx):", width=16, anchor="w").pack(side="left")
+        tk.Entry(dx_row, textvariable=self.dx_var, width=10).pack(side="left", padx=4)
+        tk.Label(dx_row, text="meters", fg="gray").pack(side="left")
+        
+        # Info label
+        tk.Label(vib_array_frame, text="Channel count auto-detected from .mat files", 
+                 fg="gray", font=("TkDefaultFont", 8)).pack(anchor="w", pady=(0, 3))
+        
+        # ===== Preprocessing Settings =====
+        preproc_frame = tk.LabelFrame(scrollable, text="Preprocessing", padx=8, pady=8)
+        preproc_frame.pack(fill="x", padx=8, pady=6)
+        
+        # Downsample row
+        ds_row = tk.Frame(preproc_frame); ds_row.pack(fill="x", pady=3)
+        tk.Checkbutton(ds_row, text="Downsample", variable=self.downsample_var).pack(side="left")
+        tk.Label(ds_row, text="Factor:").pack(side="left", padx=(16, 0))
+        ttk.Combobox(ds_row, textvariable=self.down_factor_var,
+                     values=["1", "2", "4", "8", "16", "32"],
+                     width=6, state="readonly").pack(side="left", padx=4)
+        
+        # FFT size row
+        fft_row = tk.Frame(preproc_frame); fft_row.pack(fill="x", pady=3)
+        tk.Label(fft_row, text="FFT Size (numf):", width=16, anchor="w").pack(side="left")
+        ttk.Combobox(fft_row, textvariable=self.numf_var,
+                     values=["1000", "2000", "4000", "8000"],
+                     width=8).pack(side="left", padx=4)
+        tk.Label(fft_row, text="points", fg="gray").pack(side="left")
+        
+        # ===== Peak Picking Settings =====
+        peak_frame = tk.LabelFrame(scrollable, text="Peak Picking", padx=8, pady=8)
+        peak_frame.pack(fill="x", padx=8, pady=6)
+        
+        pt_row = tk.Frame(peak_frame); pt_row.pack(fill="x", pady=3)
+        tk.Label(pt_row, text="Power Threshold:", width=16, anchor="w").pack(side="left")
+        tk.Entry(pt_row, textvariable=self.power_threshold_var, width=10).pack(side="left", padx=4)
+        tk.Label(pt_row, text="(0.0-1.0)", fg="gray").pack(side="left")
+        
+        # ===== Image Export Settings =====
+        image_frame = tk.LabelFrame(scrollable, text="Image Export", padx=8, pady=8)
+        image_frame.pack(fill="x", padx=8, pady=6)
+        
+        # Velocity range for plots with auto checkbox
+        vel_row = tk.Frame(image_frame); vel_row.pack(fill="x", pady=3)
+        tk.Checkbutton(vel_row, text="Auto", variable=self.auto_vel_limits_var,
+                       command=self._toggle_vel_limits).pack(side="left")
+        tk.Label(vel_row, text="Velocity:", width=8, anchor="w").pack(side="left")
+        self.plot_min_vel_entry = tk.Entry(vel_row, textvariable=self.plot_min_vel_var, width=7)
+        self.plot_min_vel_entry.pack(side="left", padx=2)
+        tk.Label(vel_row, text="to").pack(side="left", padx=2)
+        self.plot_max_vel_entry = tk.Entry(vel_row, textvariable=self.plot_max_vel_var, width=7)
+        self.plot_max_vel_entry.pack(side="left", padx=2)
+        tk.Label(vel_row, text="m/s", fg="gray").pack(side="left", padx=2)
+        
+        # Frequency range for plots with auto checkbox
+        freq_row = tk.Frame(image_frame); freq_row.pack(fill="x", pady=3)
+        tk.Checkbutton(freq_row, text="Auto", variable=self.auto_freq_limits_var,
+                       command=self._toggle_freq_limits).pack(side="left")
+        tk.Label(freq_row, text="Frequency:", width=8, anchor="w").pack(side="left")
+        self.plot_min_freq_entry = tk.Entry(freq_row, textvariable=self.plot_min_freq_var, width=7)
+        self.plot_min_freq_entry.pack(side="left", padx=2)
+        tk.Label(freq_row, text="to").pack(side="left", padx=2)
+        self.plot_max_freq_entry = tk.Entry(freq_row, textvariable=self.plot_max_freq_var, width=7)
+        self.plot_max_freq_entry.pack(side="left", padx=2)
+        tk.Label(freq_row, text="Hz", fg="gray").pack(side="left", padx=2)
+        
+        # Initialize entry states based on auto-limit
+        self._toggle_vel_limits()
+        self._toggle_freq_limits()
+        
+        # Tick spacing options
+        tick_label = tk.Label(image_frame, text="Axis Tick Spacing:", anchor="w")
+        tick_label.pack(fill="x", pady=(6, 2))
+        
+        freq_tick_row = tk.Frame(image_frame); freq_tick_row.pack(fill="x", pady=2)
+        tk.Label(freq_tick_row, text="Frequency:", width=12, anchor="w").pack(side="left")
+        ttk.Combobox(freq_tick_row, textvariable=self.freq_tick_spacing_var,
+                     values=["auto", "1", "2", "5", "10", "20"],
+                     width=8).pack(side="left", padx=2)
+        tk.Label(freq_tick_row, text="Hz", fg="gray").pack(side="left", padx=2)
+        
+        vel_tick_row = tk.Frame(image_frame); vel_tick_row.pack(fill="x", pady=2)
+        tk.Label(vel_tick_row, text="Velocity:", width=12, anchor="w").pack(side="left")
+        ttk.Combobox(vel_tick_row, textvariable=self.vel_tick_spacing_var,
+                     values=["auto", "10", "25", "50", "100", "200"],
+                     width=8).pack(side="left", padx=2)
+        tk.Label(vel_tick_row, text="m/s", fg="gray").pack(side="left", padx=2)
+        
+        # Colormap
+        cmap_row = tk.Frame(image_frame); cmap_row.pack(fill="x", pady=3)
+        tk.Label(cmap_row, text="Colormap:", width=12, anchor="w").pack(side="left")
+        ttk.Combobox(cmap_row, textvariable=self.cmap_var,
+                     values=["jet", "viridis", "plasma", "turbo", "seismic", "hot"],
+                     width=10, state="readonly").pack(side="left", padx=4)
+        
+        # DPI
+        dpi_row = tk.Frame(image_frame); dpi_row.pack(fill="x", pady=3)
+        tk.Label(dpi_row, text="DPI:", width=16, anchor="w").pack(side="left")
+        tk.Entry(dpi_row, textvariable=self.dpi_var, width=8).pack(side="left", padx=4)
+        tk.Label(dpi_row, text="(72-600)", fg="gray").pack(side="left")
+        
+        # Export spectra checkbox
+        exp_row = tk.Frame(image_frame); exp_row.pack(fill="x", pady=3)
+        tk.Checkbutton(exp_row, text="Export power spectra (.npz)", 
+                       variable=self.export_spectra_var).pack(side="left")
+        
+        # ===== Buttons =====
+        btn_frame = tk.Frame(scrollable)
+        btn_frame.pack(fill="x", padx=8, pady=12)
+        
+        tk.Button(btn_frame, text="Reset to Defaults", 
+                  command=self._reset_advanced_defaults).pack(side="left", padx=4)
+        tk.Button(btn_frame, text="Close", 
+                  command=popup.destroy).pack(side="right", padx=4)
+        
+        # Center the window
+        popup.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - popup.winfo_width()) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - popup.winfo_height()) // 2
+        popup.geometry(f"+{x}+{y}")
+
     def _edit_cell(self, ev):
+        """Handle double-click editing in file tree.
+        
+        Columns: (file, type, offset, rev)
+        - Column 1 (file): not editable
+        - Column 2 (type): not editable
+        - Column 3 (offset): editable text entry
+        - Column 4 (rev): toggle checkbox
+        """
         item = self.tree.identify_row(ev.y); col = self.tree.identify_column(ev.x)
         if not item: return
         col_idx = int(col.lstrip("#")); vals = list(self.tree.item(item, "values")); base = vals[0]
         x, y, w, h = self.tree.bbox(item, col)
-        if col_idx == 2:
-            e = tk.Entry(self.root); e.insert(0, vals[1])
+        if col_idx == 3:  # Offset column
+            e = tk.Entry(self.root); e.insert(0, vals[2])
             e.place(x=x, y=y + self.tree.winfo_rooty()-self.root.winfo_rooty(), width=w, height=h); e.focus()
             def _done(_):
-                vals[1] = e.get(); self.offsets[base] = vals[1]; self.tree.item(item, values=vals); e.destroy()
+                vals[2] = e.get(); self.offsets[base] = vals[2]; self.tree.item(item, values=vals); e.destroy()
             e.bind("<Return>", _done); e.bind("<FocusOut>", _done)
-        elif col_idx == 3:
-            flag = vals[2] != "☑"; self.reverse_flags[base] = flag; vals[2] = "☑" if flag else "☐"; self.tree.item(item, values=vals)
+        elif col_idx == 4:  # Reverse column
+            flag = vals[3] != "☑"; self.reverse_flags[base] = flag; vals[3] = "☑" if flag else "☐"; self.tree.item(item, values=vals)
 
     def _collect_common(self):
         try:
@@ -354,7 +734,9 @@ class SimpleMASWGUI:
             except Exception:
                 src_x = float(Shotpoint)
             ax1.plot([src_x], [0.0], "D", color="tab:red", label="Source")
-            ax1.set_yticks([]); ax1.set_xlabel("Distance (m)"); ax1.legend(loc="upper right"); ax1.set_title("Array schematic")
+            ax1.set_yticks([]); ax1.set_xlabel("Distance (m)")
+            ax1.legend(loc="upper left", bbox_to_anchor=(1.02, 1), borderaxespad=0)
+            ax1.set_title("Array schematic")
             # waterfall
             traces = Tpre.copy().T
             denom = np.max(np.abs(traces), axis=1, keepdims=True); denom[denom==0]=1.0; traces = traces/denom
@@ -363,6 +745,7 @@ class SimpleMASWGUI:
             for tr, x0 in zip(traces, positions):
                 ax2.plot(tr*scale + x0, time_pre, color="b", linewidth=0.5)
             ax2.invert_yaxis(); ax2.set_xlabel("Distance (m)"); ax2.set_ylabel("Time (s)"); ax2.set_title("Waterfall (normalized)")
+            fig.tight_layout(rect=[0, 0, 0.88, 1])  # Leave space for legend on right
             # mount
             if self.prev_canvas_widget is not None:
                 try: self.prev_canvas_widget.destroy()
@@ -373,17 +756,45 @@ class SimpleMASWGUI:
         except Exception as e:
             messagebox.showerror("Preview", str(e))
 
+    def _get_worker_count(self, mode: str = 'single') -> int:
+        """Get worker count based on user setting or auto mode."""
+        from sw_transform.workers.parallel import get_optimal_workers
+        val = self.worker_count_var.get()
+        if val == "auto":
+            return get_optimal_workers(mode=mode)
+        try:
+            return max(1, int(val))
+        except ValueError:
+            return get_optimal_workers(mode=mode)
+
     def run_single_processing(self, selected_only: bool=False):
         if not self.file_list:
-            messagebox.showerror("No files", "Select SEG-2 files first."); return
+            messagebox.showerror("No files", "Select data files first."); return
         if not self.output_folder:
             messagebox.showerror("No output", "Choose an output folder."); return
         key = self.method_key.get()
+        
+        # Check if any .mat files and method is not FDBF
+        has_mat = any(self.file_types.get(os.path.splitext(os.path.basename(p))[0]) == 'mat' 
+                      for p in self.file_list)
+        if has_mat and key != 'fdbf':
+            messagebox.showerror("Method Error", 
+                "Vibrosis .mat files only support FDBF method.\n"
+                "Please select FDBF or remove .mat files.")
+            return
+        
         if key in ("fk","fdbf"):
             grid_n = int(self.grid_fk_var.get()); tol = float(self.tol_fk_var.get()); vspace = "linear"
         else:
             grid_n = int(self.grid_ps_var.get()); tol = float(self.tol_ps_var.get()); vspace = self.vspace_ps_var.get() or "linear"
         pick_vmin, pick_vmax, pick_fmin, pick_fmax, st, en, downsample, dfac, numf, fig_dpi = self._collect_common()
+        
+        # Get dx for vibrosis .mat files
+        try:
+            dx = float(self.dx_var.get())
+        except ValueError:
+            dx = 1.0
+        
         try:
             import matplotlib as mpl; old_dpi = mpl.rcParams.get('savefig.dpi', 'figure'); mpl.rcParams['savefig.dpi'] = fig_dpi
         except Exception:
@@ -393,34 +804,92 @@ class SimpleMASWGUI:
             if selected_only:
                 sel = self.tree.selection(); selected_bases = {self.tree.item(i, "values")[0] for i in sel} if sel else set()
                 paths = [p for p in self.file_list if os.path.splitext(os.path.basename(p))[0] in selected_bases]
-            # prep progress
-            total = max(1, len(paths)); self.pb.config(maximum=total, value=0); self.pb_label.config(text="Processing…")
-            self.root.update_idletasks()
-            success = 0; failures = 0
+            
+            # Build params list for all files
+            params_list = []
             for path in paths:
                 base = os.path.splitext(os.path.basename(path))[0]
                 offset = self.offsets.get(base, "+0")
                 user_rev = self.reverse_flags.get(base, False)
                 rev = compute_reverse_flag(bool(user_rev), key)
-                # Convert vibrosis boolean to source_type string
                 source_type = "vibrosis" if self.vibrosis_mode.get() else "hammer"
+                cylindrical = self.cylindrical_var.get()
+                file_type = self.file_types.get(base, 'seg2')
+                
                 params = dict(path=path, base=base, key=key, offset=offset, outdir=self.output_folder,
                               pick_vmin=pick_vmin, pick_vmax=pick_vmax, pick_fmin=pick_fmin, pick_fmax=pick_fmax,
                               st=st, en=en, downsample=downsample, dfac=dfac, numf=numf,
                               grid_n=grid_n, tol=tol, vspace=vspace, dpi=fig_dpi, rev=rev,
                               topic=(self.figure_topic_var.get() or ""),
                               source_type=source_type,
-                              export_spectra=self.export_spectra_var.get())
-                if self.logbox: self.logbox.insert(tk.END, f"Running {base} [{key}]...\n"); self.logbox.see(tk.END)
-                _b, ok, out = svc_run_single(params)
-                if ok and isinstance(out, str) and out.lower().endswith('.png'):
-                    success += 1
-                    if self.logbox: self.logbox.insert(tk.END, f"Saved: {out}\n"); self.logbox.see(tk.END)
-                else:
-                    failures += 1
-                    if self.logbox: self.logbox.insert(tk.END, f"Failed {base}: {out}\n"); self.logbox.see(tk.END)
-                # progress update
-                self.pb.step(1); self.root.update_idletasks()
+                              cylindrical=cylindrical,
+                              export_spectra=self.export_spectra_var.get(),
+                              file_type=file_type,
+                              dx=dx if file_type == 'mat' else None,
+                              auto_vel_limits=self.auto_vel_limits_var.get(),
+                              auto_freq_limits=self.auto_freq_limits_var.get(),
+                              plot_min_vel=self.plot_min_vel_var.get(),
+                              plot_max_vel=self.plot_max_vel_var.get(),
+                              plot_min_freq=self.plot_min_freq_var.get(),
+                              plot_max_freq=self.plot_max_freq_var.get(),
+                              cmap=self.cmap_var.get(),
+                              freq_tick_spacing=self.freq_tick_spacing_var.get(),
+                              vel_tick_spacing=self.vel_tick_spacing_var.get())
+                params_list.append(params)
+            
+            total = max(1, len(params_list))
+            self.pb.config(maximum=total, value=0)
+            use_parallel = self.parallel_var.get() and len(params_list) > 1
+            
+            if use_parallel:
+                # Parallel processing
+                from sw_transform.workers.parallel import run_batch_parallel
+                n_workers = self._get_worker_count(mode='single')
+                self.pb_label.config(text=f"Processing {total} files ({n_workers} workers)...")
+                self.root.update()
+                if self.logbox:
+                    self.logbox.insert(tk.END, f"Starting parallel processing: {total} files on {n_workers} workers\n")
+                    self.logbox.see(tk.END)
+                
+                # Progress callback updates GUI
+                def progress_cb(completed, total_count, current_base):
+                    self.pb['value'] = completed
+                    self.pb_label.config(text=f"Completed {completed}/{total_count}: {current_base}")
+                    if self.logbox:
+                        self.logbox.insert(tk.END, f"Finished: {current_base}\n")
+                        self.logbox.see(tk.END)
+                    self.root.update()
+                
+                results = run_batch_parallel(params_list, mode='single', max_workers=n_workers, progress_callback=progress_cb)
+                success = sum(1 for r in results if r.success)
+                failures = sum(1 for r in results if not r.success)
+                
+                # Log any failures
+                for r in results:
+                    if not r.success and self.logbox:
+                        self.logbox.insert(tk.END, f"Failed {r.base}: {r.error}\n")
+                        self.logbox.see(tk.END)
+            else:
+                # Sequential processing (original code)
+                self.pb_label.config(text="Processing…")
+                self.root.update_idletasks()
+                success = 0; failures = 0
+                for idx, params in enumerate(params_list):
+                    base = params['base']
+                    self.pb_label.config(text=f"Processing {idx+1}/{total}: {base}")
+                    self.pb['value'] = idx
+                    self.root.update()
+                    if self.logbox: self.logbox.insert(tk.END, f"Running {base} [{key}]...\n"); self.logbox.see(tk.END)
+                    _b, ok, out = svc_run_single(params)
+                    if ok and isinstance(out, str) and out.lower().endswith('.png'):
+                        success += 1
+                        if self.logbox: self.logbox.insert(tk.END, f"Saved: {out}\n"); self.logbox.see(tk.END)
+                    else:
+                        failures += 1
+                        if self.logbox: self.logbox.insert(tk.END, f"Failed {base}: {out}\n"); self.logbox.see(tk.END)
+                    self.pb['value'] = idx + 1
+                    self.root.update()
+            
             # After all files processed, create combined CSV
             if success > 0:
                 try:
@@ -468,9 +937,19 @@ class SimpleMASWGUI:
 
     def run_compare_processing(self, selected_only: bool=False):
         if not self.file_list:
-            messagebox.showerror("No files", "Select SEG-2 files first."); return
+            messagebox.showerror("No files", "Select data files first."); return
         if not self.output_folder:
             messagebox.showerror("No output", "Choose an output folder."); return
+        
+        # Check if any .mat files - compare mode not supported for .mat
+        has_mat = any(self.file_types.get(os.path.splitext(os.path.basename(p))[0]) == 'mat' 
+                      for p in self.file_list)
+        if has_mat:
+            messagebox.showerror("Compare Not Supported", 
+                "Compare mode is not supported for vibrosis .mat files.\n"
+                "Use 'Run Selected/All' with FDBF method instead.")
+            return
+        
         pick_vmin, pick_vmax, pick_fmin, pick_fmax, st, en, downsample, dfac, numf, fig_dpi = self._collect_common()
         n_fk = int(self.grid_fk_var.get()); tol_fk = float(self.tol_fk_var.get())
         n_ps = int(self.grid_ps_var.get()); vspace_ps = self.vspace_ps_var.get() or "linear"
@@ -478,31 +957,76 @@ class SimpleMASWGUI:
         if selected_only:
             sel = self.tree.selection(); selected_bases = {self.tree.item(i, "values")[0] for i in sel} if sel else set()
             paths = [p for p in self.file_list if os.path.splitext(os.path.basename(p))[0] in selected_bases]
-        success = 0; failures = 0
-        total = max(1, len(paths)); self.pb.config(maximum=total, value=0); self.pb_label.config(text="Comparing…"); self.root.update_idletasks()
+        
+        # Build params list for all files
+        params_list = []
         for path in paths:
             base = os.path.splitext(os.path.basename(path))[0]
             offset = self.offsets.get(base, "+0")
             user_rev = self.reverse_flags.get(base, False)
-            # Convert vibrosis boolean to source_type string
             source_type = "vibrosis" if self.vibrosis_mode.get() else "hammer"
+            cylindrical = self.cylindrical_var.get()
             params = dict(path=path, base=base, outdir=self.output_folder, offset=offset,
                           pick_vmin=pick_vmin, pick_vmax=pick_vmax, pick_fmin=pick_fmin, pick_fmax=pick_fmax,
                           st=st, en=en, downsample=downsample, dfac=dfac, numf=numf,
                           n_fk=n_fk, tol_fk=tol_fk, n_ps=n_ps, vspace_ps=vspace_ps,
-                          rev_fk=(not user_rev), rev_ps=(not user_rev), rev_fdbf=user_rev, rev_ss=user_rev,
+                          rev_fk=user_rev, rev_ps=user_rev, rev_fdbf=user_rev, rev_ss=user_rev,
                           topic=(self.figure_topic_var.get() or ""),
                           source_type=source_type,
+                          cylindrical=cylindrical,
                           export_spectra=self.export_spectra_var.get())
-            if self.logbox: self.logbox.insert(tk.END, f"Compare {base}...\n"); self.logbox.see(tk.END)
-            _b, ok, out = svc_run_compare(params)
-            if ok and isinstance(out, str) and out.lower().endswith('.png'):
-                success += 1
-                if self.logbox: self.logbox.insert(tk.END, f"Saved: {out}\n"); self.logbox.see(tk.END)
-            else:
-                failures += 1
-                if self.logbox: self.logbox.insert(tk.END, f"Failed {base}: {out}\n"); self.logbox.see(tk.END)
-            self.pb.step(1); self.root.update_idletasks()
+            params_list.append(params)
+        
+        total = max(1, len(params_list))
+        self.pb.config(maximum=total, value=0)
+        use_parallel = self.parallel_var.get() and len(params_list) > 1
+        
+        if use_parallel:
+            # Parallel processing - use fewer workers for compare (memory intensive)
+            from sw_transform.workers.parallel import run_batch_parallel
+            n_workers = self._get_worker_count(mode='compare')
+            self.pb_label.config(text=f"Comparing {total} files ({n_workers} workers)...")
+            self.root.update()
+            if self.logbox:
+                self.logbox.insert(tk.END, f"Starting parallel comparison: {total} files on {n_workers} workers\n")
+                self.logbox.see(tk.END)
+            
+            def progress_cb(completed, total_count, current_base):
+                self.pb['value'] = completed
+                self.pb_label.config(text=f"Completed {completed}/{total_count}: {current_base}")
+                if self.logbox:
+                    self.logbox.insert(tk.END, f"Finished: {current_base}\n")
+                    self.logbox.see(tk.END)
+                self.root.update()
+            
+            results = run_batch_parallel(params_list, mode='compare', max_workers=n_workers, progress_callback=progress_cb)
+            success = sum(1 for r in results if r.success)
+            failures = sum(1 for r in results if not r.success)
+            
+            for r in results:
+                if not r.success and self.logbox:
+                    self.logbox.insert(tk.END, f"Failed {r.base}: {r.error}\n")
+                    self.logbox.see(tk.END)
+        else:
+            # Sequential processing
+            self.pb_label.config(text="Comparing…")
+            self.root.update_idletasks()
+            success = 0; failures = 0
+            for idx, params in enumerate(params_list):
+                base = params['base']
+                self.pb_label.config(text=f"Comparing {idx+1}/{total}: {base}")
+                self.pb['value'] = idx
+                self.root.update()
+                if self.logbox: self.logbox.insert(tk.END, f"Compare {base}...\n"); self.logbox.see(tk.END)
+                _b, ok, out = svc_run_compare(params)
+                if ok and isinstance(out, str) and out.lower().endswith('.png'):
+                    success += 1
+                    if self.logbox: self.logbox.insert(tk.END, f"Saved: {out}\n"); self.logbox.see(tk.END)
+                else:
+                    failures += 1
+                    if self.logbox: self.logbox.insert(tk.END, f"Failed {base}: {out}\n"); self.logbox.see(tk.END)
+                self.pb['value'] = idx + 1
+                self.root.update()
         # After all files processed, create combined CSV for compare mode
         if success > 0:
             try:

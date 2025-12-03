@@ -119,6 +119,8 @@ class StandardMASWWorkflow(BaseWorkflow):
     def run(
         self,
         output_dir: Optional[str] = None,
+        parallel: bool = False,
+        max_workers: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Execute the workflow.
         
@@ -126,6 +128,10 @@ class StandardMASWWorkflow(BaseWorkflow):
         ----------
         output_dir : str, optional
             Output directory (overrides config if provided)
+        parallel : bool
+            If True, process sub-arrays in parallel
+        max_workers : int, optional
+            Number of parallel workers (default: auto)
         
         Returns
         -------
@@ -160,44 +166,84 @@ class StandardMASWWorkflow(BaseWorkflow):
         
         self._report_progress(0, total_shots, "Starting processing...")
         
-        for shot_idx, shot in enumerate(shots):
-            self._report_progress(
-                shot_idx, total_shots,
-                f"Processing shot {shot_idx + 1}/{total_shots}: {Path(shot.file).name}"
-            )
-            
-            try:
-                # Load shot data
-                time, data, _, file_dx, dt, _ = load_seg2_ar(shot.file)
-                
-                # Use dx from config (file_dx may be 0)
-                dx = self.config["array"]["dx"]
-                if file_dx > 0:
-                    dx = file_dx
-                
-                # Extract all valid sub-arrays
-                extracted = extract_all_subarrays_from_shot(
-                    data, time, dt, dx,
-                    shot, subarrays,
-                    reverse_if_needed=True
+        if parallel:
+            # Parallel processing: collect all extracted sub-arrays first
+            all_extracted = []
+            for shot_idx, shot in enumerate(shots):
+                self._report_progress(
+                    shot_idx, total_shots,
+                    f"Extracting shot {shot_idx + 1}/{total_shots}: {Path(shot.file).name}"
                 )
-                
-                if not extracted:
+                try:
+                    time, data, _, file_dx, dt, _ = load_seg2_ar(shot.file)
+                    dx = self.config["array"]["dx"]
+                    if file_dx > 0:
+                        dx = file_dx
+                    
+                    extracted = extract_all_subarrays_from_shot(
+                        data, time, dt, dx,
+                        shot, subarrays,
+                        reverse_if_needed=True
+                    )
+                    all_extracted.extend(extracted)
+                except Exception as e:
+                    import warnings
+                    warnings.warn(f"Failed to extract from {shot.file}: {e}")
                     continue
+            
+            if all_extracted:
+                self._report_progress(total_shots, total_shots, 
+                    f"Processing {len(all_extracted)} sub-arrays in parallel...")
                 
-                # Process
-                results = process_batch(
-                    extracted,
+                # Use parallel batch processing
+                from sw_transform.masw2d.processing.batch_processor import process_batch_parallel
+                all_results = process_batch_parallel(
+                    all_extracted,
                     method=method,
-                    processing_params=proc_params
+                    processing_params=proc_params,
+                    max_workers=max_workers,
+                    progress_callback=self._progress_callback
+                )
+        else:
+            # Sequential processing (original)
+            for shot_idx, shot in enumerate(shots):
+                self._report_progress(
+                    shot_idx, total_shots,
+                    f"Processing shot {shot_idx + 1}/{total_shots}: {Path(shot.file).name}"
                 )
                 
-                all_results.extend(results)
-                
-            except Exception as e:
-                import warnings
-                warnings.warn(f"Failed to process {shot.file}: {e}")
-                continue
+                try:
+                    # Load shot data
+                    time, data, _, file_dx, dt, _ = load_seg2_ar(shot.file)
+                    
+                    # Use dx from config (file_dx may be 0)
+                    dx = self.config["array"]["dx"]
+                    if file_dx > 0:
+                        dx = file_dx
+                    
+                    # Extract all valid sub-arrays
+                    extracted = extract_all_subarrays_from_shot(
+                        data, time, dt, dx,
+                        shot, subarrays,
+                        reverse_if_needed=True
+                    )
+                    
+                    if not extracted:
+                        continue
+                    
+                    # Process
+                    results = process_batch(
+                        extracted,
+                        method=method,
+                        processing_params=proc_params
+                    )
+                    
+                    all_results.extend(results)
+                    
+                except Exception as e:
+                    import warnings
+                    warnings.warn(f"Failed to process {shot.file}: {e}")
+                    continue
         
         self._report_progress(total_shots, total_shots, "Organizing results...")
         

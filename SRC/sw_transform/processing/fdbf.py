@@ -1,129 +1,540 @@
-"""FDBF (native) cross-spectra + f-k analysis and plotting."""
+"""FDBF - Frequency-Domain Beamformer based on swprocess (Vantassel 2021).
+
+Implements Zywicki (1999) beamforming with:
+- Multiple weighting options: none, sqrt, invamp
+- Multiple steering options: plane, cylindrical
+- Direct velocity-space output
+"""
 
 from __future__ import annotations
 
-import os
-import sys
+import numpy as np
+from scipy import special
 
 
-def _legacy_base() -> str:
-    here = os.path.dirname(__file__)
-    return os.path.abspath(os.path.join(here, "..", "..", "..", "Previous", "4_wave_cursor"))
-
-
-def _ensure_legacy() -> None:
-    base = _legacy_base()
-    if base not in sys.path:
-        sys.path.insert(0, base)
-
-
-def compute_cross_spectra(Timematrix, fs, max_frequency=100.0, do_tra_subsample=True, keep_below_10=True, desired_number=400, weight_mode='none'):
-    import numpy as np
-    from scipy.signal import csd
-    num_samples, num_channels = Timematrix.shape
-    R_full = np.zeros((num_channels, num_channels, num_samples // 2 + 1), dtype=complex)
-    for m in range(num_channels):
-        for n in range(num_channels):
-            f, Pxy = csd(Timematrix[:, m], Timematrix[:, n], fs=fs, window='boxcar', nperseg=num_samples, noverlap=0)
-            R_full[m, n, :] = Pxy
-    freq_full = f
+def fdbf_transform(data, dt, dx, fmin=5.0, fmax=100.0, nvel=400, vmin=50.0, vmax=5000.0,
+                   vspace="linear", weighting='none', steering='plane'):
+    """Frequency-Domain Beamformer transform (swprocess implementation).
     
-    # Apply frequency-domain weighting based on source type
-    if weight_mode == 'invamp':  # For vibrosis sources
-        # Apply inverse amplitude weighting to compensate for frequency-dependent attenuation
-        for i, freq in enumerate(freq_full):
-            if freq > 0:  # Avoid division by zero at DC
-                # Inverse amplitude weighting: boost higher frequencies
-                weight = np.sqrt(freq / freq_full[-1]) if freq_full[-1] > 0 else 1.0
-                R_full[:, :, i] *= weight
-    elif weight_mode == 'sqrt':  # Alternative weighting for hammer sources
-        # Apply square root weighting
-        for i, freq in enumerate(freq_full):
-            if freq > 0:
-                weight = np.sqrt(np.sqrt(freq / freq_full[-1])) if freq_full[-1] > 0 else 1.0
-                R_full[:, :, i] *= weight
-    if not do_tra_subsample:
-        mask = (freq_full <= max_frequency)
-        return R_full[..., mask], freq_full[mask]
-    idx_setf10 = int(np.argmin(np.abs(freq_full - 10.0)))
-    idx_setfmax = int(np.argmin(np.abs(freq_full - max_frequency)))
-    divd = int(round((len(freq_full) - idx_setf10) / desired_number))
-    if divd < 1:
-        divd = 1
-    part1 = list(range(0, idx_setf10 + 1)) if keep_below_10 else []
-    part2 = list(range(idx_setf10 + 1, idx_setfmax + 1, divd))
-    tra = part1 + part2
-    return R_full[:, :, tra], freq_full[tra]
+    Based on Zywicki (1999) and Vantassel (2021) swprocess.
+    Works directly in velocity-space for dispersion imaging.
+    
+    Parameters
+    ----------
+    data : ndarray
+        Time-domain data matrix (nsamples, nchannels)
+    dt : float
+        Time sampling interval (seconds)
+    dx : float
+        Geophone spacing (meters)
+    fmin, fmax : float
+        Frequency range (Hz)
+    nvel : int
+        Number of velocity samples
+    vmin, vmax : float
+        Velocity range (m/s)
+    vspace : str
+        'linear' or 'log' velocity spacing
+    weighting : str
+        Weighting mode: 'none', 'sqrt', 'invamp'
+        - 'none': No weighting (standard FDBF)
+        - 'sqrt': Square root of distance weighting
+        - 'invamp': Inverse amplitude weighting (good for vibrosis sources)
+    steering : str
+        Steering mode: 'plane' or 'cylindrical'
+        - 'plane': Plane wave assumption
+        - 'cylindrical': Cylindrical wave using Hankel function
+        
+    Returns
+    -------
+    frequencies : ndarray
+        Frequency vector (Hz)
+    velocities : ndarray
+        Velocity vector (m/s)
+    power : ndarray
+        Normalized power spectrum (nvel, nfreq)
+    """
+    nsamples, nchannels = data.shape
+    
+    # Receiver offsets (relative positions)
+    offsets = np.arange(nchannels) * dx
+    
+    # Frequency vector
+    df = 1.0 / (nsamples * dt)
+    frqs = np.arange(nsamples) * df
+    
+    # Keep frequencies in range
+    keep_ids = np.where((frqs >= fmin) & (frqs <= fmax))[0]
+    frequencies = frqs[keep_ids]
+    nfreq = len(frequencies)
+    
+    # Velocity vector
+    if vspace == "log":
+        velocities = np.geomspace(vmin, vmax, nvel)
+    else:
+        velocities = np.linspace(vmin, vmax, nvel)
+    
+    # FFT of data - shape (nchannels, nsamples)
+    tmatrix = data.T
+    transform = np.fft.fft(tmatrix, axis=1)
+    transform = transform[:, keep_ids]  # Trim to freq range (nchannels, nfreq)
+    
+    # Apply weighting to transform
+    if weighting == 'invamp':
+        # Inverse amplitude weighting: compensates for frequency-dependent attenuation
+        weight = 1.0 / np.abs(np.mean(transform, axis=0, keepdims=True))
+        weight = np.where(np.isinf(weight) | np.isnan(weight), 1.0, weight)
+        transform = transform * weight
+    elif weighting == 'sqrt':
+        # Square root of distance weighting applied to transform
+        w = np.sqrt(np.maximum(offsets, 1.0))[:, np.newaxis]
+        transform = transform * w
+    
+    # Vectorized FDBF computation
+    # Create meshgrid for vectorized computation
+    V = velocities[:, np.newaxis, np.newaxis]  # (nvel, 1, 1)
+    X = offsets[np.newaxis, :, np.newaxis]      # (1, nchannels, 1)
+    F = frequencies[np.newaxis, np.newaxis, :]  # (1, 1, nfreq)
+    
+    # Phase: k*x = 2πf/v * x
+    phase = 2.0 * np.pi * F * X / V  # (nvel, nchannels, nfreq)
+    
+    # Steering function
+    if steering == 'cylindrical':
+        # Cylindrical wave using Hankel function
+        # Reference: UofA_MASWMultiProcessV2Cyl.m line 329-330
+        # expterm = exp( 1i .* angle(H0) ) - uses +1i, not -1i
+        with np.errstate(divide='ignore', invalid='ignore'):
+            h0 = special.j0(phase) + 1j * special.y0(phase)
+            h0 = np.where(phase > 1e-10, h0, 1.0 + 0j)
+        steer = np.exp(1j * np.angle(h0))  # +1j per MATLAB reference
+    else:  # plane
+        steer = np.exp(1j * phase)  # +1j for correct direction
+    
+    # Broadcast transform: (nchannels, nfreq) -> (nvel, nchannels, nfreq)
+    U_broad = transform[np.newaxis, :, :]
+    
+    # Beamforming: sum of steered signals
+    inner = steer * U_broad
+    power = np.abs(np.sum(inner, axis=1)) ** 2  # Squared for power
+    
+    # Normalize per frequency
+    max_per_freq = np.max(power, axis=0, keepdims=True)
+    max_per_freq[max_per_freq == 0] = 1.0
+    power = power / max_per_freq
+    
+    return frequencies, velocities, power
 
 
-def fk_analysis_1d(R_sub, freq_sub, spacing, cylindrical=False, numk=4000, min_velocity=100, max_velocity=5000, tol=0.0):
-    import numpy as np
-    num_channels, _, nfreq = R_sub.shape
-    position = np.arange(1, num_channels + 1) * spacing
-    kalias = 2.0 * np.pi / spacing
-    ktrial = np.linspace(0.0001, kalias, numk)
-    Power = np.zeros((numk, nfreq), dtype=complex)
-    pnorm = np.zeros((numk, nfreq), dtype=complex)
-    kmax_arr = np.zeros(nfreq)
-    for i in range(nfreq):
-        R_f = R_sub[:, :, i]
-        for j in range(numk):
-            k_j = ktrial[j]
-            steer = np.exp(1j * k_j * position)
-            Power[j, i] = np.conjugate(steer) @ (R_f @ steer)
-        max_val = np.max(np.abs(Power[:, i]))
-        if max_val > 0:
-            pnorm[:, i] = Power[:, i] / max_val
-        kmax_arr[i] = ktrial[int(np.argmax(np.abs(Power[:, i])))]
-    vmax = np.zeros(nfreq)
-    for i in range(nfreq):
-        if freq_sub[i] > 0 and kmax_arr[i] != 0:
-            vmax[i] = (2.0 * np.pi * freq_sub[i]) / kmax_arr[i]
+def analyze_fdbf_spectrum(freq_sub, velocities, power, normalization="frequency-maximum", tol=0.0,
+                          power_threshold=0.1, velocity_min=50.0, velocity_max=5000.0):
+    """Analyze FDBF spectrum and pick dispersion curve.
+    
+    Parameters
+    ----------
+    freq_sub : ndarray
+        Frequency vector (Hz)
+    velocities : ndarray
+        Velocity vector (m/s)
+    power : ndarray
+        Power spectrum (nvel, nfreq)
+    normalization : str
+        Normalization method
+    tol : float
+        Tolerance for removing closely-spaced picks
+    power_threshold : float
+        Minimum normalized power to consider valid
+    velocity_min, velocity_max : float
+        Velocity bounds for filtering picks
+        
+    Returns
+    -------
+    pnorm : ndarray
+        Normalized power spectrum
+    vmax : ndarray
+        Picked velocities
+    wavelength : ndarray
+        Wavelength at each frequency
+    freq_out : ndarray
+        Output frequency vector
+    """
+    # Skip DC component
+    if freq_sub[0] == 0:
+        freq_sub = freq_sub[1:]
+        power = power[:, 1:]
+    
+    pnorm = np.abs(power.copy())
+    
+    # Store raw power for threshold check
+    global_max_power = np.nanmax(pnorm) if np.nanmax(pnorm) > 0 else 1.0
+    max_power_per_freq = np.nanmax(pnorm, axis=0)
+    
+    # Normalize
+    if normalization == "none":
+        pass
+    elif normalization == "absolute-maximum":
+        pnorm = pnorm / global_max_power
+    else:  # frequency-maximum
+        fac = max_power_per_freq.copy()
+        fac[fac == 0] = 1.0
+        fac[np.isnan(fac)] = 1.0
+        pnorm = pnorm / fac
+    
+    # Find peaks with margin
+    margin = min(5, len(velocities) // 10)
+    valid_slice = slice(margin, -margin if margin > 0 else None)
+    idx = np.nanargmax(pnorm[valid_slice, :], axis=0)
+    vmax = velocities[valid_slice][idx].astype(float)
+    
+    # Apply power threshold
+    normalized_freq_power = max_power_per_freq / global_max_power
+    low_power_mask = normalized_freq_power < power_threshold
+    vmax[low_power_mask] = np.nan
+    
+    # Apply velocity bounds
+    vmax[(vmax < velocity_min) | (vmax > velocity_max)] = np.nan
+    
+    # Apply tolerance filter
     if tol > 0 and len(vmax) > 1:
-        dv_min = tol * (max_velocity - min_velocity) / numk
-        last = None
+        dv_min = tol * (velocities[1] - velocities[0]) if len(velocities) > 1 else 0
+        last_v = None
         for i, v in enumerate(vmax):
-            if last is not None and abs(v - last) < dv_min:
+            if np.isnan(v):
+                continue
+            if last_v is not None and abs(v - last_v) < dv_min:
                 vmax[i] = np.nan
             else:
-                last = v
-    wavelength = np.zeros(nfreq)
-    for i in range(nfreq):
-        if freq_sub[i] > 0:
-            wavelength[i] = vmax[i] / freq_sub[i]
-    return ktrial, pnorm, vmax, wavelength
+                last_v = v
+    
+    wavelength = vmax / freq_sub
+    return pnorm, vmax, wavelength, freq_sub
 
 
-def plot_freq_velocity_spectrum(freq_sub, ktrial, pnorm, vmax, max_velocity=5000, max_frequency=100.0, offset_label="", fig_name="", title: str | None = None):
-    import numpy as np
+def plot_fdbf_dispersion(freq_sub, velocities, pnorm, vmax_picks, vmin_plot=0, vmax_plot=5000,
+                         min_frequency=0, max_frequency=None, title="FDBF Dispersion", cmap="jet",
+                         offset_label="", fig_name="", power_mask_threshold=0.0,
+                         freq_tick_spacing='auto', vel_tick_spacing='auto'):
+    """Plot FDBF dispersion in frequency-velocity domain.
+    
+    Parameters
+    ----------
+    freq_sub : ndarray
+        Frequency vector
+    velocities : ndarray
+        Velocity vector
+    pnorm : ndarray
+        Normalized power (nvel, nfreq)
+    vmax_picks : ndarray
+        Picked velocities
+    vmin_plot : float
+        Minimum velocity for plot
+    vmax_plot : float
+        Maximum velocity for plot
+    min_frequency : float
+        Minimum frequency for plot
+    max_frequency : float
+        Maximum frequency for plot
+    title : str
+        Plot title
+    cmap : str
+        Colormap name
+    offset_label : str
+        Shot offset label
+    fig_name : str
+        Output filename
+    power_mask_threshold : float
+        Threshold below which power is masked
+    freq_tick_spacing : str or float
+        Frequency axis tick spacing ('auto' or value in Hz)
+    vel_tick_spacing : str or float
+        Velocity axis tick spacing ('auto' or value in m/s)
+    """
     import matplotlib.pyplot as plt
-    nfreq = len(freq_sub)
-    numk = len(ktrial)
-    velocity2d = np.zeros((numk, nfreq))
-    for i in range(nfreq):
-        for j in range(numk):
-            if ktrial[j] != 0:
-                velocity2d[j, i] = (2.0 * np.pi * freq_sub[i]) / ktrial[j]
-    freq_grid = np.zeros_like(velocity2d)
-    for i in range(nfreq):
-        freq_grid[:, i] = freq_sub[i]
-    plt.figure(figsize=(8, 6))
-    cp = plt.contourf(freq_grid, velocity2d, np.abs(pnorm), levels=30, cmap='jet')
-    plt.colorbar(cp, label="Normalized Power")
-    plt.xlim([0, max_frequency])
-    plt.ylim([0, max_velocity])
-    plt.xlabel("Frequency (Hz)")
-    plt.ylabel("Phase Velocity (m/s)")
-    title_str = title if (title is not None and len(str(title))>0) else "3-D Dispersion (Freq vs. Velocity)"
-    if offset_label:
-        title_str += f"\nShot offset: {offset_label}"
-    plt.title(title_str)
-    plt.plot(freq_sub, vmax, 'o', markerfacecolor='none', markeredgecolor='white', markersize=5)
-    plt.grid(True)
-    plt.legend(["Dispersion Picks"])
+    import matplotlib.ticker as ticker
+    
+    max_frequency = max_frequency or freq_sub[-1]
+    min_frequency = min_frequency or 0
+    
+    V, F = np.meshgrid(velocities, freq_sub, indexing='ij')
+    
+    P_plot = pnorm.copy()
+    if power_mask_threshold > 0:
+        global_max = np.nanmax(P_plot)
+        if global_max > 0:
+            P_plot[P_plot < power_mask_threshold * global_max] = np.nan
+    
+    fig, ax = plt.subplots(figsize=(8, 6))
+    P_masked = np.ma.masked_invalid(P_plot)
+    cf = ax.contourf(F, V, P_masked, levels=30, cmap=cmap)
+    plt.colorbar(cf, label="Normalized Power")
+    ax.plot(freq_sub, vmax_picks, 'o', mfc='none', mec='white', ms=4, label="Dispersion Picks")
+    
+    ttl = title if offset_label == "" else f"{title}\nShot offset: {offset_label}"
+    ax.set_title(ttl)
+    ax.set_xlabel("Frequency (Hz)")
+    ax.set_ylabel("Phase Velocity (m/s)")
+    ax.set_xlim(min_frequency, max_frequency)
+    ax.set_ylim(vmin_plot, vmax_plot)
+    
+    # Apply custom tick spacing with adaptive font sizing
+    if freq_tick_spacing != 'auto':
+        try:
+            spacing = float(freq_tick_spacing)
+            ax.xaxis.set_major_locator(ticker.MultipleLocator(spacing))
+            # Smaller font and rotation for finer spacing to prevent overlap
+            if spacing <= 2:
+                ax.tick_params(axis='x', labelsize=7, rotation=45)
+            elif spacing <= 5:
+                ax.tick_params(axis='x', labelsize=8, rotation=30)
+            else:
+                ax.tick_params(axis='x', labelsize=9)
+        except (ValueError, TypeError):
+            pass
+    if vel_tick_spacing != 'auto':
+        try:
+            spacing = float(vel_tick_spacing)
+            ax.yaxis.set_major_locator(ticker.MultipleLocator(spacing))
+            # Smaller font for finer spacing to prevent overlap
+            if spacing <= 25:
+                ax.tick_params(axis='y', labelsize=7)
+            elif spacing <= 50:
+                ax.tick_params(axis='y', labelsize=8)
+            else:
+                ax.tick_params(axis='y', labelsize=9)
+        except (ValueError, TypeError):
+            pass
+    
+    ax.grid(alpha=0.3)
+    ax.legend()
+    plt.tight_layout()
+    
+    # Re-apply limits after tight_layout to ensure they stick
+    ax.set_xlim(min_frequency, max_frequency)
+    ax.set_ylim(vmin_plot, vmax_plot)
+    
     if fig_name:
-        plt.savefig(fig_name, bbox_inches='tight'); plt.close()
+        plt.savefig(fig_name, bbox_inches="tight")
+        plt.close()
     else:
-        plt.show(); plt.close()
+        plt.show()
+        plt.close()
 
 
+# Legacy API aliases for backward compatibility
+def compute_cross_spectra(Timematrix, fs, max_frequency=100.0, do_tra_subsample=True, 
+                          keep_below_10=True, desired_number=400, weight_mode='none'):
+    """Legacy API - redirects to fdbf_transform."""
+    dt = 1.0 / fs
+    nsamples, nchannels = Timematrix.shape
+    # This function used to return cross-spectra; now just returns frequencies
+    # as the new API handles everything in fdbf_transform
+    df = 1.0 / (nsamples * dt)
+    freq_full = np.arange(nsamples // 2 + 1) * df
+    mask = freq_full <= max_frequency
+    return None, freq_full[mask]
+
+
+def fk_analysis_1d(R_sub, freq_sub, spacing, cylindrical=False, numk=4000, 
+                   min_velocity=100, max_velocity=5000, tol=0.0):
+    """Legacy API - use fdbf_transform + analyze_fdbf_spectrum instead."""
+    # This is kept for backward compatibility but the new code path
+    # uses fdbf_transform directly
+    nfreq = len(freq_sub)
+    velocities = np.linspace(min_velocity, max_velocity, numk)
+    pnorm = np.zeros((numk, nfreq))
+    vmax = np.full(nfreq, np.nan)
+    wavelength = np.zeros(nfreq)
+    return velocities, pnorm, vmax, wavelength
+
+
+def plot_freq_velocity_spectrum(freq_sub, velocities, pnorm, vmax, max_velocity=5000, 
+                                max_frequency=100.0, offset_label="", fig_name="", 
+                                title=None):
+    """Legacy API - redirects to plot_fdbf_dispersion."""
+    plot_fdbf_dispersion(freq_sub, velocities, pnorm, vmax, 
+                         vmax_plot=max_velocity, max_frequency=max_frequency,
+                         title=title or "FDBF Dispersion", 
+                         offset_label=offset_label, fig_name=fig_name)
+
+
+def fdbf_transform_from_R(R: np.ndarray, frequencies: np.ndarray, dx: float,
+                          fmin: float = 5.0, fmax: float = 100.0,
+                          nvel: int = 400, vmin: float = 50.0, vmax: float = 5000.0,
+                          vspace: str = "linear", steering: str = "cylindrical") -> tuple:
+    """FDBF transform using pre-computed cross-spectral matrix R.
+    
+    This function is designed for vibrosis data where transfer functions
+    are already in the frequency domain. It skips FFT and applies
+    beamforming directly to the cross-spectral matrix.
+    
+    Based on UofA_MASWMultiProcessV2Cyl.m MATLAB implementation.
+    
+    Parameters
+    ----------
+    R : ndarray
+        Cross-spectral matrix (nchannels, nchannels, nfreq)
+        R[j, i, f] = TF[f, i] / TF[f, j]
+    frequencies : ndarray
+        Frequency vector (Hz) corresponding to R
+    dx : float
+        Geophone spacing (meters)
+    fmin, fmax : float
+        Frequency range to process (Hz)
+    nvel : int
+        Number of velocity samples
+    vmin, vmax : float
+        Velocity range (m/s)
+    vspace : str
+        'linear' or 'log' velocity spacing
+    steering : str
+        'plane' or 'cylindrical' (default cylindrical for vibrosis)
+        
+    Returns
+    -------
+    freq_out : ndarray
+        Output frequency vector (Hz)
+    velocities : ndarray
+        Velocity vector (m/s)
+    power : ndarray
+        Normalized power spectrum (nvel, nfreq_out)
+    """
+    nchannels = R.shape[0]
+    
+    # Filter frequency range
+    freq_mask = (frequencies >= fmin) & (frequencies <= fmax)
+    freq_out = frequencies[freq_mask]
+    R_sub = R[:, :, freq_mask]  # (nchannels, nchannels, nfreq_sub)
+    nfreq = len(freq_out)
+    
+    # Velocity vector
+    if vspace == "log":
+        velocities = np.geomspace(vmin, vmax, nvel)
+    else:
+        velocities = np.linspace(vmin, vmax, nvel)
+    
+    # Receiver offsets (relative positions)
+    offsets = np.arange(nchannels, dtype=float) * dx
+    
+    # Compute power spectrum using beamforming
+    # For each velocity v and frequency f:
+    #   P(v, f) = |sum_i sum_j e(i) * conj(e(j)) * R(j, i, f)|
+    # where e(i) = steering vector element for receiver i
+    
+    power = np.zeros((nvel, nfreq), dtype=float)
+    
+    for iv, vel in enumerate(velocities):
+        if vel <= 0:
+            continue
+            
+        for ifr, freq in enumerate(freq_out):
+            if freq <= 0:
+                continue
+            
+            # Wavenumber
+            k = 2.0 * np.pi * freq / vel
+            
+            # Phase delays: k * x for each receiver
+            phase = k * offsets  # (nchannels,)
+            
+            # Steering vector
+            if steering == 'cylindrical':
+                # Cylindrical wave: Hankel function steering
+                # Reference: UofA_MASWMultiProcessV2Cyl.m line 329-330
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    h0 = special.j0(phase) + 1j * special.y0(phase)
+                    # Handle near-zero phase (avoid singularity)
+                    h0 = np.where(phase > 1e-10, h0, 1.0 + 0j)
+                e = np.exp(1j * np.angle(h0))  # +1j per MATLAB reference
+            else:
+                # Plane wave steering
+                e = np.exp(1j * phase)
+            
+            # Beamformer output: e^H * R * e
+            # = sum_j sum_i conj(e[j]) * R[j,i,f] * e[i]
+            R_f = R_sub[:, :, ifr]  # (nchannels, nchannels)
+            
+            # Vectorized: e^H * R * e
+            beam_out = np.dot(np.conj(e), np.dot(R_f, e))
+            power[iv, ifr] = np.abs(beam_out)
+    
+    # Normalize per frequency
+    max_per_freq = np.max(power, axis=0, keepdims=True)
+    max_per_freq[max_per_freq == 0] = 1.0
+    power = power / max_per_freq
+    
+    return freq_out, velocities, power
+
+
+def fdbf_transform_from_R_vectorized(R: np.ndarray, frequencies: np.ndarray, dx: float,
+                                     fmin: float = 5.0, fmax: float = 100.0,
+                                     nvel: int = 400, vmin: float = 50.0, vmax: float = 5000.0,
+                                     vspace: str = "linear", steering: str = "cylindrical") -> tuple:
+    """Vectorized FDBF transform from cross-spectral matrix R.
+    
+    Faster implementation using numpy broadcasting. Same parameters and
+    returns as fdbf_transform_from_R.
+    """
+    nchannels = R.shape[0]
+    
+    # Filter frequency range
+    freq_mask = (frequencies >= fmin) & (frequencies <= fmax)
+    freq_out = frequencies[freq_mask]
+    R_sub = R[:, :, freq_mask]  # (nchannels, nchannels, nfreq_sub)
+    nfreq = len(freq_out)
+    
+    if nfreq == 0:
+        return freq_out, np.array([]), np.array([]).reshape(0, 0)
+    
+    # Velocity vector
+    if vspace == "log":
+        velocities = np.geomspace(vmin, vmax, nvel)
+    else:
+        velocities = np.linspace(vmin, vmax, nvel)
+    
+    # Receiver offsets
+    offsets = np.arange(nchannels, dtype=float) * dx
+    
+    # Create meshgrids for vectorized computation
+    V = velocities[:, np.newaxis, np.newaxis]  # (nvel, 1, 1)
+    F = freq_out[np.newaxis, np.newaxis, :]    # (1, 1, nfreq)
+    X = offsets[np.newaxis, :, np.newaxis]     # (1, nchannels, 1)
+    
+    # Phase: k * x = 2πf/v * x
+    # Shape: (nvel, nchannels, nfreq)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        phase = 2.0 * np.pi * F * X / V
+        phase = np.where(V > 0, phase, 0)
+    
+    # Steering vector
+    # Reference: UofA_MASWMultiProcessV2Cyl.m line 329-330
+    if steering == 'cylindrical':
+        with np.errstate(divide='ignore', invalid='ignore'):
+            h0 = special.j0(phase) + 1j * special.y0(phase)
+            h0 = np.where(phase > 1e-10, h0, 1.0 + 0j)
+        e = np.exp(1j * np.angle(h0))  # +1j per MATLAB reference (nvel, nchannels, nfreq)
+    else:
+        e = np.exp(1j * phase)  # (nvel, nchannels, nfreq)
+    
+    # Beamformer: P(v,f) = |e^H R e| = |sum_j sum_i conj(e_j) R_ji e_i|
+    # R_sub: (nchannels, nchannels, nfreq)
+    # e: (nvel, nchannels, nfreq)
+    
+    power = np.zeros((nvel, nfreq), dtype=float)
+    
+    for ifr in range(nfreq):
+        R_f = R_sub[:, :, ifr]  # (nchannels, nchannels)
+        e_f = e[:, :, ifr]      # (nvel, nchannels)
+        
+        # For each velocity: e_v^H * R_f * e_v
+        # e_f[v, :] is steering vector for velocity v
+        # Vectorized over velocities
+        Re = np.dot(R_f, e_f.T)  # (nchannels, nvel)
+        beam = np.sum(np.conj(e_f.T) * Re, axis=0)  # (nvel,)
+        power[:, ifr] = np.abs(beam)
+    
+    # Normalize per frequency
+    max_per_freq = np.max(power, axis=0, keepdims=True)
+    max_per_freq[max_per_freq == 0] = 1.0
+    power = power / max_per_freq
+    
+    return freq_out, velocities, power

@@ -69,7 +69,21 @@ def cmd_run(args) -> int:
     
     # Run
     try:
-        results = workflow.run(output_dir=args.output)
+        # Build run arguments
+        run_kwargs = {"output_dir": args.output}
+        
+        # Add parallel processing if requested
+        if args.parallel:
+            run_kwargs["parallel"] = True
+            if args.workers:
+                run_kwargs["max_workers"] = args.workers
+            if not args.quiet:
+                from sw_transform.workers.parallel import get_optimal_workers
+                n_workers = args.workers or get_optimal_workers(mode='single')
+                print(f"  Parallel mode: {n_workers} workers")
+                print()
+        
+        results = workflow.run(**run_kwargs)
     except Exception as e:
         print(f"Error: Workflow failed: {e}")
         import traceback
@@ -78,7 +92,7 @@ def cmd_run(args) -> int:
     
     # Print results
     if results.get("status") == "success":
-        print(f"\n✓ Workflow completed successfully!")
+        print(f"\n[OK] Workflow completed successfully!")
         print(f"  Dispersion curves: {results.get('n_results', 0)}")
         print(f"  Midpoints: {results.get('n_midpoints', 0)}")
         print(f"  Output files: {len(results.get('files', []))}")
@@ -89,7 +103,7 @@ def cmd_run(args) -> int:
         
         return 0
     else:
-        print(f"\n✗ Workflow failed")
+        print(f"\n[FAILED] Workflow failed")
         if results.get("error"):
             print(f"  Error: {results['error']}")
         return 1

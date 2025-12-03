@@ -86,6 +86,13 @@ Examples:
     summ_parser = info_sub.add_parser("summary", help="Show workflow summary")
     summ_parser.add_argument("config", help="Config file")
     
+    # info layout
+    layout_parser = info_sub.add_parser("layout", help="Show sub-array layout info")
+    layout_parser.add_argument("--config", help="Config file (optional)")
+    layout_parser.add_argument("--channels", "-n", type=int, default=24, help="Total channels (if no config)")
+    layout_parser.add_argument("--dx", type=float, default=2.0, help="Geophone spacing (if no config)")
+    layout_parser.add_argument("--subarray", "-s", type=int, help="Show details for specific sub-array size")
+    
     # ===== WORKFLOW COMMANDS =====
     wf_parser = subparsers.add_parser("workflow", help="Execute workflows")
     wf_sub = wf_parser.add_subparsers(dest="workflow_cmd")
@@ -98,6 +105,8 @@ Examples:
     run_parser.add_argument("--images", action="store_true", help="Export dispersion spectrum images")
     run_parser.add_argument("--max-velocity", type=float, default=5000, help="Max velocity for plots (m/s)")
     run_parser.add_argument("--max-frequency", type=float, help="Max frequency for plots (Hz)")
+    run_parser.add_argument("--parallel", "-p", action="store_true", help="Enable parallel processing")
+    run_parser.add_argument("--workers", "-w", type=int, default=None, help="Number of parallel workers (default: auto)")
     run_parser.add_argument("--quiet", "-q", action="store_true", help="Suppress progress output")
     
     # workflow list

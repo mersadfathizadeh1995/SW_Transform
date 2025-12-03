@@ -99,7 +99,14 @@ def process_subarray(
     tol: float = 0.01,
     vspace: str = "log",
     source_type: str = "hammer",
+    cylindrical: bool = False,
     power_threshold: float = 0.1,
+    # Preprocessing parameters
+    start_time: float = 0.0,
+    end_time: float = 1.0,
+    downsample: bool = True,
+    down_factor: int = 16,
+    numf: int = 4000,
     **kwargs
 ) -> DispersionResult:
     """Process a single extracted sub-array to get dispersion curve.
@@ -128,6 +135,18 @@ def process_subarray(
         Velocity spacing: 'log' or 'linear'
     source_type : str
         Source type: 'hammer' or 'vibrosis'
+    cylindrical : bool
+        If True, use cylindrical steering for FDBF (near-field correction)
+    start_time : float
+        Start time for windowing (seconds)
+    end_time : float
+        End time for windowing (seconds)
+    downsample : bool
+        Whether to downsample data
+    down_factor : int
+        Downsampling factor
+    numf : int
+        Number of frequency points for FFT
     
     Returns
     -------
@@ -135,77 +154,65 @@ def process_subarray(
         Dispersion analysis result
     """
     from sw_transform.processing.registry import METHODS, dyn
+    from sw_transform.processing.preprocess import preprocess_data
     
-    data = extracted.data
+    # Get raw data
+    raw_data = extracted.data
     dt = extracted.dt
     dx = extracted.dx
+    
+    # Create time vector for preprocessing
+    n_samples = raw_data.shape[0]
+    time = np.arange(n_samples) * dt
+    
+    # Apply preprocessing (same as single transform)
+    data, _, dt = preprocess_data(
+        raw_data, time, dt,
+        reverse_shot=False,  # Already handled in extraction
+        start_time=start_time,
+        end_time=end_time,
+        do_downsample=downsample,
+        down_factor=down_factor,
+        numf=numf
+    )
     
     if method not in METHODS:
         raise ValueError(f"Unknown method: {method}. Available: {list(METHODS.keys())}")
     
     cfg = METHODS[method]
-    step3 = dyn(cfg["step3"])
-    step4 = dyn(cfg["step4"])
+    transform_func = dyn(cfg["transform"])
+    analyze_func = dyn(cfg["analyze"])
     
-    # Process based on method
-    if method == "fk":
-        f, k, P = step3(data, dt, dx, fmin=0, fmax=freq_max, numk=grid_n)
-        f, k, pnorm, vmax, wav = step4(f, k, P, tol=tol, power_threshold=power_threshold,
-                                        velocity_min=velocity_min, velocity_max=velocity_max)
-        pnorm = np.abs(pnorm)
+    # Use unified transform interface: all return (frequencies, velocities, power)
+    if method in ("fk", "fdbf"):
+        # FK and FDBF use nvel for velocity grid
+        transform_kwargs = dict(
+            fmin=freq_min, fmax=freq_max,
+            nvel=grid_n, vmin=velocity_min, vmax=velocity_max,
+            vspace='linear'  # FK/FDBF typically use linear
+        )
+        # FDBF-specific: add weighting for vibrosis sources and cylindrical steering
+        if method == "fdbf":
+            weighting = 'invamp' if source_type == 'vibrosis' else 'none'
+            steering = 'cylindrical' if cylindrical else 'plane'
+            transform_kwargs['weighting'] = weighting
+            transform_kwargs['steering'] = steering
         
-        # Convert to velocity space for consistent output
-        nv = 400
-        velocities = np.linspace(max(1.0, velocity_min), velocity_max, nv)
-        power = np.zeros((nv, len(f)))
-        for i, fi in enumerate(f):
-            if fi > 0:
-                k_need = 2 * np.pi * fi / velocities
-                power[:, i] = np.interp(k_need, k, pnorm[:, i], left=0.0, right=0.0)
-        
-        frequencies = f
-        
-    elif method == "fdbf":
-        fs = 1.0 / dt
-        weight_mode = 'invamp' if source_type == 'vibrosis' else 'none'
-        R, f = step3(data, fs, max_frequency=freq_max,
-                     do_tra_subsample=True, keep_below_10=True,
-                     desired_number=400, weight_mode=weight_mode)
-        k, pnorm, vmax, wav = step4(R, f, dx, cylindrical=False,
-                                     numk=grid_n, min_velocity=100,
-                                     max_velocity=5000, tol=tol)
-        pnorm = np.abs(pnorm)
-        
-        # Convert to velocity space
-        nv = 400
-        velocities = np.linspace(max(1.0, velocity_min), velocity_max, nv)
-        power = np.zeros((nv, len(f)))
-        for i, fi in enumerate(f):
-            if fi > 0:
-                k_need = 2 * np.pi * fi / velocities
-                power[:, i] = np.interp(k_need, k, pnorm[:, i], left=0.0, right=0.0)
-        
-        frequencies = f
-        
-    elif method == "ps":
-        f, vels, P = step3(data, dt, dx, fmin=0, fmax=freq_max,
-                          nvel=grid_n, vmin=100, vmax=5000, vspace=vspace)
-        pnorm, vmax, wav, f = step4(f, vels, P)
-        pnorm = np.abs(pnorm)
-        
-        frequencies = f
-        velocities = vels
-        power = pnorm
-        
-    else:  # ss (slant stack)
-        f, vels, P = step3(data, dt, dx, fmin=0, fmax=freq_max,
-                          nvel=grid_n, vmin=100, vmax=5000, vspace=vspace)
-        pnorm, vmax, wav, f = step4(f, vels, P)
-        pnorm = np.abs(pnorm)
-        
-        frequencies = f
-        velocities = vels
-        power = pnorm
+        frequencies, velocities, power = transform_func(
+            data, dt, dx, **transform_kwargs
+        )
+    else:
+        # PS and SS
+        frequencies, velocities, power = transform_func(
+            data, dt, dx,
+            fmin=freq_min, fmax=freq_max,
+            nvel=grid_n, vmin=velocity_min, vmax=velocity_max,
+            vspace=vspace
+        )
+    
+    # Analyze: pick peaks
+    pnorm, vmax, wav, frequencies = analyze_func(frequencies, velocities, power)
+    pnorm = np.abs(pnorm)
     
     # Calculate wavelengths
     wavelengths = np.zeros_like(vmax)
@@ -287,6 +294,83 @@ def process_batch(
             progress_callback(i + 1, total)
     
     return results
+
+
+def process_batch_parallel(
+    extracted_list: List[ExtractedSubArray],
+    method: str = "ps",
+    processing_params: Optional[Dict[str, Any]] = None,
+    max_workers: Optional[int] = None,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None
+) -> List[DispersionResult]:
+    """Process multiple sub-arrays in parallel.
+    
+    Parameters
+    ----------
+    extracted_list : list of ExtractedSubArray
+        List of extracted sub-arrays to process
+    method : str
+        Processing method
+    processing_params : dict, optional
+        Processing parameters (freq_min, freq_max, etc.)
+    max_workers : int, optional
+        Number of parallel workers (default: auto)
+    progress_callback : callable, optional
+        Callback function(current, total, message) for progress reporting
+    
+    Returns
+    -------
+    list of DispersionResult
+        Results for each sub-array
+    """
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    from sw_transform.workers.parallel import get_optimal_workers
+    
+    if not extracted_list:
+        return []
+    
+    params = processing_params.copy() if processing_params else {}
+    params.pop('method', None)
+    
+    if max_workers is None:
+        max_workers = get_optimal_workers(mode='single')
+    
+    total = len(extracted_list)
+    results = [None] * total
+    
+    # Build work items with index for result ordering
+    work_items = [(i, ext, method, params) for i, ext in enumerate(extracted_list)]
+    
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks
+        future_to_idx = {
+            executor.submit(_process_single_worker, item): item[0]
+            for item in work_items
+        }
+        
+        completed = 0
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                result = future.result()
+                results[idx] = result
+            except Exception as e:
+                import warnings
+                ext = extracted_list[idx]
+                warnings.warn(f"Failed to process sub-array at {ext.midpoint:.1f}m: {e}")
+            
+            completed += 1
+            if progress_callback:
+                progress_callback(completed, total, f"midpoint {extracted_list[idx].midpoint:.1f}m")
+    
+    # Filter out None results (failures)
+    return [r for r in results if r is not None]
+
+
+def _process_single_worker(work_item):
+    """Worker function for parallel processing - must be at module level."""
+    idx, extracted, method, params = work_item
+    return process_subarray(extracted, method=method, **params)
 
 
 def group_results_by_midpoint(

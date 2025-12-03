@@ -15,6 +15,8 @@ def dispatch(args) -> int:
         return cmd_subarrays(args)
     elif args.info_cmd == "summary":
         return cmd_summary(args)
+    elif args.info_cmd == "layout":
+        return cmd_layout(args)
     else:
         print("Unknown info command. Use --help for available commands.")
         return 1
@@ -145,4 +147,53 @@ def cmd_summary(args) -> int:
     print(f"\nMidpoint positions (m):")
     print(f"  {', '.join(f'{m:.1f}' for m in info['midpoints'])}")
     
+    return 0
+
+
+def cmd_layout(args) -> int:
+    """Show layout information for sub-array configurations."""
+    from sw_transform.masw2d.geometry.layout import (
+        calculate_layout, format_layout_summary
+    )
+    from sw_transform.masw2d.config.templates import (
+        get_available_subarray_sizes, get_all_subarray_info
+    )
+    
+    # Get parameters - either from config or direct args
+    if hasattr(args, 'config') and args.config:
+        config = _load_config(args.config)
+        if config is None:
+            return 1
+        total_channels = config["array"]["n_channels"]
+        dx = config["array"]["dx"]
+    else:
+        total_channels = getattr(args, 'channels', 24)
+        dx = getattr(args, 'dx', 2.0)
+    
+    subarray_size = getattr(args, 'subarray', None)
+    
+    # If specific subarray requested, show detailed info
+    if subarray_size:
+        if subarray_size > total_channels:
+            print(f"Error: subarray size ({subarray_size}) > total channels ({total_channels})")
+            return 1
+        
+        layout = calculate_layout(total_channels, dx, subarray_size)
+        print(format_layout_summary(layout))
+        return 0
+    
+    # Otherwise show all available configurations
+    print(f"Available Sub-Array Configurations")
+    print(f"Array: {total_channels} channels, dx={dx}m, total length={(total_channels-1)*dx}m")
+    print(f"{'='*70}")
+    print(f"{'Channels':>10} {'Length':>10} {'Max Depth':>12} {'# Positions':>12} {'Midpoint Range':>20}")
+    print(f"{'-'*70}")
+    
+    infos = get_all_subarray_info(total_channels, dx, min_channels=6)
+    for info in infos:
+        mid_range = f"{info['first_midpoint']:.1f} - {info['last_midpoint']:.1f}m"
+        print(f"{info['n_channels']:>10} {info['array_length']:>10.1f}m {info['max_depth']:>11.1f}m "
+              f"{info['n_midpoints']:>12} {mid_range:>20}")
+    
+    print(f"\nUse --subarray N for detailed info on a specific configuration.")
     return 0

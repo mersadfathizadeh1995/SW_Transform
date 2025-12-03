@@ -129,14 +129,13 @@ def extract_subarray(
     
     sub_data = shot_data[:, start_ch:end_ch].copy()
     
-    # Flip channel order for FORWARD shots (source on LEFT side)
+    # Flip channel order for REVERSE shots (source on RIGHT side)
     # For FK/PS methods, data must be arranged so wave propagates from 
-    # low channel index to high channel index (left to right in array)
-    # - Forward shots (source left): channels are already in correct order
-    #   but FK/PS expect flip, so we flip here
-    # - Reverse shots (source right): channels naturally reversed, no flip needed
-    # This matches the main package's compute_reverse_flag logic
-    if reverse_if_needed and direction == "forward":
+    # low channel index to high channel index (positive velocity)
+    # - Forward shots (source left): wave travels left→right, channels correct
+    # - Reverse shots (source right): wave travels right→left, need to flip
+    # This ensures consistent phase velocity direction in FK/PS spectrum
+    if reverse_if_needed and direction == "reverse":
         sub_data = np.fliplr(sub_data)
     
     return ExtractedSubArray(

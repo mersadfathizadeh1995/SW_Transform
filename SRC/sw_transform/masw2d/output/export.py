@@ -118,9 +118,12 @@ def export_dispersion_image(
     filepath: str,
     max_velocity: Optional[float] = None,
     max_frequency: Optional[float] = None,
+    min_frequency: Optional[float] = None,
     cmap: str = "jet",
     dpi: int = 150,
-    auto_velocity_limit: bool = True
+    auto_velocity_limit: bool = True,
+    fill_nan: bool = True,
+    nan_color: str = "lightgray"
 ) -> str:
     """Export dispersion spectrum as PNG image.
     
@@ -135,6 +138,8 @@ def export_dispersion_image(
         automatically determined from picked velocities.
     max_frequency : float, optional
         Maximum frequency for plot axis
+    min_frequency : float, optional
+        Minimum frequency for plot axis (default: from result metadata or 5 Hz)
     cmap : str
         Colormap name
     dpi : int
@@ -142,6 +147,10 @@ def export_dispersion_image(
     auto_velocity_limit : bool
         If True and max_velocity is None, automatically determine velocity limit
         from picks (max pick velocity + 20% margin, rounded to nice number)
+    fill_nan : bool
+        If True, fill NaN/masked regions with nan_color instead of white
+    nan_color : str
+        Color for NaN regions (default: 'lightgray')
     
     Returns
     -------
@@ -159,45 +168,82 @@ def export_dispersion_image(
     power = np.asarray(result.power)
     picks = np.asarray(result.picked_velocities)
     
+    # Get frequency limits from metadata or use defaults
+    if min_frequency is None:
+        min_frequency = result.metadata.get('freq_min', 5.0)
     if max_frequency is None:
-        max_frequency = freqs[-1] if len(freqs) > 0 else 100.0
+        max_frequency = result.metadata.get('freq_max', freqs[-1] if len(freqs) > 0 else 80.0)
     
-    # Auto-determine max_velocity from picks if not specified
+    # Get velocity limits - prefer metadata, then auto-detect
     if max_velocity is None:
-        if auto_velocity_limit:
-            valid_picks = picks[~np.isnan(picks)]
-            if len(valid_picks) > 0:
-                max_pick = np.max(valid_picks)
-                # Add 20% margin and round to nice number
-                max_velocity = _round_to_nice_number(max_pick * 1.2)
+        max_velocity = result.metadata.get('velocity_max', None)
+    
+    if max_velocity is None and auto_velocity_limit:
+        # Auto-detect from data
+        power_threshold_detect = 0.05
+        max_pwr = np.nanmax(power)
+        if max_pwr > 0:
+            sig_mask = power > power_threshold_detect * max_pwr
+            if np.any(sig_mask):
+                v_indices = np.any(sig_mask, axis=1)
+                max_v_idx = np.max(np.where(v_indices)[0]) if np.any(v_indices) else len(vels) - 1
+                detected_max_v = vels[min(max_v_idx + 5, len(vels) - 1)]
+                valid_picks = picks[~np.isnan(picks)]
+                if len(valid_picks) > 0:
+                    detected_max_v = max(detected_max_v, np.max(valid_picks) * 1.1)
+                max_velocity = _round_to_nice_number(detected_max_v * 1.1)
             else:
-                max_velocity = 1000.0  # Default fallback
+                max_velocity = 1000.0
         else:
-            max_velocity = 5000.0  # Legacy default
+            max_velocity = 1000.0
+    
+    max_velocity = max(max_velocity or 1000.0, 200.0)
     
     # Create uniform velocity grid for plotting
     nv = 400
-    v_min = max_velocity / nv
+    v_min = max(10.0, result.metadata.get('velocity_min', 50.0))
     vaxis = np.linspace(v_min, max_velocity, nv)
     
     # Interpolate power to uniform velocity grid
     n_f = len(freqs)
-    P_vf = np.zeros((nv, n_f))
+    P_vf = np.full((nv, n_f), np.nan)
     
     for i in range(n_f):
         if i < power.shape[1]:
-            P_vf[:, i] = np.interp(vaxis, vels, power[:, i], left=0.0, right=0.0)
+            P_vf[:, i] = np.interp(vaxis, vels, power[:, i], left=np.nan, right=np.nan)
     
-    # Plot
+    # Apply power threshold for display
+    power_threshold = 0.02
+    max_power = np.nanmax(P_vf)
+    if max_power > 0:
+        P_vf[P_vf < power_threshold * max_power] = np.nan
+    
+    # Plot using pcolormesh for proper NaN handling
     fig, ax = plt.subplots(figsize=(8, 6))
+    
+    # Create colormap with NaN color
+    cmap_obj = plt.cm.get_cmap(cmap).copy()
+    if fill_nan:
+        cmap_obj.set_bad(color=nan_color)
+    else:
+        cmap_obj.set_bad(color='white')
+    
+    # Use pcolormesh for better NaN handling
     X, Y = np.meshgrid(freqs, vaxis)
-    cf = ax.contourf(X, Y, P_vf, levels=30, cmap=cmap)
-    plt.colorbar(cf, ax=ax, label="Normalized Power")
+    valid_power = P_vf[~np.isnan(P_vf)]
+    if len(valid_power) > 0:
+        vmin = power_threshold * max_power
+        vmax = np.max(valid_power)
+    else:
+        vmin, vmax = 0, 1
+    
+    pcm = ax.pcolormesh(X, Y, P_vf, cmap=cmap_obj, vmin=vmin, vmax=vmax, shading='auto')
+    plt.colorbar(pcm, ax=ax, label="Normalized Power")
     
     # Plot picks
     valid_mask = ~np.isnan(picks)
     ax.plot(freqs[valid_mask], picks[valid_mask], 'o', 
-            mfc='none', mec='white', ms=4, label="Picks")
+            mfc='none', mec='white', ms=4, mew=1.5, label="Picks")
     
     # Title with metadata
     title = f"{result.method.upper()} Dispersion - Midpoint {result.midpoint:.1f}m"
@@ -206,8 +252,8 @@ def export_dispersion_image(
     
     ax.set_xlabel("Frequency (Hz)")
     ax.set_ylabel("Phase Velocity (m/s)")
-    ax.set_xlim(0, max_frequency)
-    ax.set_ylim(0, max_velocity)
+    ax.set_xlim(min_frequency, max_frequency)
+    ax.set_ylim(v_min, max_velocity)
     ax.grid(alpha=0.3)
     ax.legend(loc='upper right')
     

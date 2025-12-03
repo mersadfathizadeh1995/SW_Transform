@@ -34,7 +34,7 @@ def main(argv: list[str] | None = None) -> int:
         st=0.0, en=1.0,
         downsample=True, dfac=16, numf=4000,
         n_fk=4000, tol_fk=0.0, n_ps=1200, vspace_ps="log",
-        rev_fk=True, rev_ps=True, rev_fdbf=False, rev_ss=False,
+        rev_fk=False, rev_ps=False, rev_fdbf=False, rev_ss=False,
         topic="",
         source_type=a.source_type,
         export_spectra=a.export_spectra,

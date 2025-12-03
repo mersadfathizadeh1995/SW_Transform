@@ -4,6 +4,7 @@ Provides:
 - Shot classification (exterior, edge, interior)
 - Sub-array definition and enumeration
 - Midpoint and offset calculations
+- Layout visualization
 """
 
 from .shot_classifier import (
@@ -22,6 +23,14 @@ from .midpoint import (
     is_valid_offset,
     get_array_bounds,
 )
+from .layout import (
+    LayoutInfo,
+    calculate_layout,
+    get_subarray_bounds,
+    format_layout_summary,
+    plot_layout,
+    plot_all_configs_comparison,
+)
 
 __all__ = [
     "ShotType",
@@ -34,4 +43,10 @@ __all__ = [
     "calculate_source_offset",
     "is_valid_offset",
     "get_array_bounds",
+    "LayoutInfo",
+    "calculate_layout",
+    "get_subarray_bounds",
+    "format_layout_summary",
+    "plot_layout",
+    "plot_all_configs_comparison",
 ]
