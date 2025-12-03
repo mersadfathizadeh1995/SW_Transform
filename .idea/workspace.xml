@@ -5,24 +5,7 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="8ffa933e-c08f-4f0c-9e07-4dfe5f7e232f" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/SRC/sw_transform/cli/compare.py" beforeDir="false" afterPath="$PROJECT_DIR$/SRC/sw_transform/cli/compare.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/SRC/sw_transform/cli/masw2d/info_cmd.py" beforeDir="false" afterPath="$PROJECT_DIR$/SRC/sw_transform/cli/masw2d/info_cmd.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/SRC/sw_transform/cli/masw2d/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/SRC/sw_transform/cli/masw2d/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/SRC/sw_transform/cli/masw2d/workflow_cmd.py" beforeDir="false" afterPath="$PROJECT_DIR$/SRC/sw_transform/cli/masw2d/workflow_cmd.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/SRC/sw_transform/core/service.py" beforeDir="false" afterPath="$PROJECT_DIR$/SRC/sw_transform/core/service.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/SRC/sw_transform/gui/simple_app.py" beforeDir="false" afterPath="$PROJECT_DIR$/SRC/sw_transform/gui/simple_app.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/SRC/sw_transform/masw2d/config/templates.py" beforeDir="false" afterPath="$PROJECT_DIR$/SRC/sw_transform/masw2d/config/templates.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/SRC/sw_transform/masw2d/extraction/subarray_extractor.py" beforeDir="false" afterPath="$PROJECT_DIR$/SRC/sw_transform/masw2d/extraction/subarray_extractor.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/SRC/sw_transform/masw2d/geometry/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/SRC/sw_transform/masw2d/geometry/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/SRC/sw_transform/masw2d/output/export.py" beforeDir="false" afterPath="$PROJECT_DIR$/SRC/sw_transform/masw2d/output/export.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/SRC/sw_transform/masw2d/processing/batch_processor.py" beforeDir="false" afterPath="$PROJECT_DIR$/SRC/sw_transform/masw2d/processing/batch_processor.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/SRC/sw_transform/masw2d/workflows/standard_masw.py" beforeDir="false" afterPath="$PROJECT_DIR$/SRC/sw_transform/masw2d/workflows/standard_masw.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/SRC/sw_transform/processing/fdbf.py" beforeDir="false" afterPath="$PROJECT_DIR$/SRC/sw_transform/processing/fdbf.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/SRC/sw_transform/processing/fk.py" beforeDir="false" afterPath="$PROJECT_DIR$/SRC/sw_transform/processing/fk.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/SRC/sw_transform/processing/ps.py" beforeDir="false" afterPath="$PROJECT_DIR$/SRC/sw_transform/processing/ps.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/SRC/sw_transform/processing/registry.py" beforeDir="false" afterPath="$PROJECT_DIR$/SRC/sw_transform/processing/registry.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/SRC/sw_transform/processing/ss.py" beforeDir="false" afterPath="$PROJECT_DIR$/SRC/sw_transform/processing/ss.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/SRC/sw_transform/workers/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/SRC/sw_transform/workers/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/MASW_2D/Plan/MASW2D_GUI_Modularization_Plan.md" beforeDir="false" afterPath="$PROJECT_DIR$/MASW_2D/Plan/MASW2D_GUI_Modularization_Plan.md" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -77,7 +60,7 @@
       <workItem from="1764690996670" duration="1040000" />
       <workItem from="1764704493039" duration="4987000" />
       <workItem from="1764718434755" duration="376000" />
-      <workItem from="1764779570615" duration="651000" />
+      <workItem from="1764779570615" duration="1249000" />
     </task>
     <servers />
   </component>
