@@ -5,6 +5,8 @@ Provides a complete interface for 2D MASW processing with:
 - Sub-array configuration with visual layout preview
 - Processing settings
 - Workflow execution
+
+This module has been refactored to use components from sw_transform.masw2d.gui.
 """
 
 from __future__ import annotations
@@ -14,6 +16,19 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from typing import Any, Dict, List, Optional, Callable
 import threading
+
+# Import GUI components
+from sw_transform.masw2d.gui import (
+    MASW2D_DEFAULTS,
+    ArraySetupPanel,
+    FileManagerPanel,
+    SubarrayConfigPanel,
+    ProcessingPanel,
+    OutputPanel,
+    MASW2DRunPanel,
+    LayoutPreviewPanel,
+    MASW2DAdvancedSettings,
+)
 
 
 class MASW2DTab:
@@ -60,24 +75,8 @@ class MASW2DTab:
         self.include_images_var = tk.BooleanVar(value=True)  # Enable images by default
         
         # === Advanced Settings Variables ===
-        # Default values (used for reset)
-        self._DEFAULTS = {
-            'grid_n': '4000',
-            'vspace': 'log',
-            'tol': '0.01',
-            'power_threshold': '0.1',
-            'start_time': '0.0',
-            'end_time': '1.0',
-            'downsample': True,
-            'down_factor': '16',
-            'numf': '4000',
-            'plot_max_vel': 'auto',
-            'plot_max_freq': 'auto',
-            'cmap': 'jet',
-            'dpi': '150',
-            'vibrosis': False,
-            'cylindrical': False
-        }
+        # Use defaults from masw2d.gui.defaults
+        self._DEFAULTS = MASW2D_DEFAULTS
         
         # Transform settings
         self.grid_n_var = tk.StringVar(value=self._DEFAULTS['grid_n'])

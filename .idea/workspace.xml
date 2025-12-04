@@ -4,9 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="8ffa933e-c08f-4f0c-9e07-4dfe5f7e232f" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/MASW_2D/Plan/MASW2D_GUI_Modularization_Plan.md" beforeDir="false" afterPath="$PROJECT_DIR$/MASW_2D/Plan/MASW2D_GUI_Modularization_Plan.md" afterDir="false" />
-    </list>
+    <list default="true" id="8ffa933e-c08f-4f0c-9e07-4dfe5f7e232f" name="Changes" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -60,7 +58,7 @@
       <workItem from="1764690996670" duration="1040000" />
       <workItem from="1764704493039" duration="4987000" />
       <workItem from="1764718434755" duration="376000" />
-      <workItem from="1764779570615" duration="1249000" />
+      <workItem from="1764779570615" duration="1770000" />
     </task>
     <servers />
   </component>

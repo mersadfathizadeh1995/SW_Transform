@@ -8,6 +8,10 @@ from sw_transform.core.service import run_single as svc_run_single, run_compare 
 from sw_transform.processing.registry import METHODS, dyn as dyn_func, compute_reverse_flag
 from sw_transform.io.file_assignment import assign_files as assign_files_from_names
 
+# Modular components
+from sw_transform.gui.utils.defaults import DEFAULTS
+from sw_transform.gui.utils.icons import load_icon, load_app_icon
+
 
 class SimpleMASWGUI:
     def __init__(self, root: tk.Tk):
@@ -17,43 +21,8 @@ class SimpleMASWGUI:
             self.root.geometry("1000x680"); self.root.minsize(900, 560)
         except Exception:
             pass
-        # App icon (white background)
-        try:
-            # Titlebar/taskbar icon: prefer .ico; build from the largest PNG if needed
-            base_assets = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "assets_big"))
-            # search for the largest icon_app*.png
-            src_png = None; max_size = -1
-            if os.path.isdir(base_assets):
-                for fn in os.listdir(base_assets):
-                    if fn.lower().startswith("icon_app") and fn.lower().endswith(".png"):
-                        p = os.path.join(base_assets, fn)
-                        try:
-                            from PIL import Image
-                            with Image.open(p) as im:
-                                w, h = im.size
-                                if w*h > max_size:
-                                    max_size = w*h; src_png = p
-                        except Exception:
-                            continue
-            if src_png is not None:
-                try:
-                    from PIL import Image
-                    import tempfile
-                    ico_tmp = os.path.join(tempfile.gettempdir(), "sw_transform_icon_tmp.ico")
-                    with Image.open(src_png) as im:
-                        # build ICO with multiple sizes for better scaling
-                        sizes = [(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)]
-                        im.save(ico_tmp, format='ICO', sizes=sizes)
-                    try:
-                        self.root.iconbitmap(ico_tmp)
-                    except Exception:
-                        # fallback to iconphoto PNG
-                        self._app_icon = tk.PhotoImage(file=src_png)
-                        self.root.iconphoto(True, self._app_icon)
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        # App icon using utility function
+        self._app_icon = load_app_icon(root)
 
         # icon cache
         self._icons: dict[str, tk.PhotoImage] = {}
@@ -89,45 +58,18 @@ class SimpleMASWGUI:
         self.parallel_var = tk.BooleanVar(value=True)  # Enable parallel processing by default
         self.worker_count_var = tk.StringVar(value="auto")  # "auto" or specific number
         
-        # === Advanced Settings Variables ===
-        # Default values (used for reset)
-        self._DEFAULTS = {
-            'grid_fk': '4000',
-            'tol_fk': '0',
-            'grid_ps': '1200',
-            'vspace_ps': 'log',
-            'tol_ps': '0',
-            'vibrosis': False,
-            'cylindrical': False,
-            'downsample': True,
-            'down_factor': '16',
-            'numf': '4000',
-            'power_threshold': '0.1',
-            'auto_vel_limits': True,
-            'auto_freq_limits': True,
-            'plot_min_vel': '0',
-            'plot_max_vel': '2000',
-            'plot_min_freq': '0',
-            'plot_max_freq': '100',
-            'freq_tick_spacing': 'auto',
-            'vel_tick_spacing': 'auto',
-            'cmap': 'jet',
-            'dpi': '200',
-            'export_spectra': True,
-            'dx': '2.0'  # Sensor spacing for vibrosis .mat files
-        }
-        
+        # === Advanced Settings Variables (use imported DEFAULTS) ===
         # New variables for advanced settings
-        self.power_threshold_var = tk.StringVar(value=self._DEFAULTS['power_threshold'])
-        self.auto_vel_limits_var = tk.BooleanVar(value=self._DEFAULTS['auto_vel_limits'])
-        self.auto_freq_limits_var = tk.BooleanVar(value=self._DEFAULTS['auto_freq_limits'])
-        self.plot_min_vel_var = tk.StringVar(value=self._DEFAULTS['plot_min_vel'])
-        self.plot_max_vel_var = tk.StringVar(value=self._DEFAULTS['plot_max_vel'])
-        self.plot_min_freq_var = tk.StringVar(value=self._DEFAULTS['plot_min_freq'])
-        self.plot_max_freq_var = tk.StringVar(value=self._DEFAULTS['plot_max_freq'])
-        self.freq_tick_spacing_var = tk.StringVar(value=self._DEFAULTS['freq_tick_spacing'])
-        self.vel_tick_spacing_var = tk.StringVar(value=self._DEFAULTS['vel_tick_spacing'])
-        self.cmap_var = tk.StringVar(value=self._DEFAULTS['cmap'])
+        self.power_threshold_var = tk.StringVar(value=DEFAULTS['power_threshold'])
+        self.auto_vel_limits_var = tk.BooleanVar(value=DEFAULTS['auto_vel_limits'])
+        self.auto_freq_limits_var = tk.BooleanVar(value=DEFAULTS['auto_freq_limits'])
+        self.plot_min_vel_var = tk.StringVar(value=DEFAULTS['plot_min_vel'])
+        self.plot_max_vel_var = tk.StringVar(value=DEFAULTS['plot_max_vel'])
+        self.plot_min_freq_var = tk.StringVar(value=DEFAULTS['plot_min_freq'])
+        self.plot_max_freq_var = tk.StringVar(value=DEFAULTS['plot_max_freq'])
+        self.freq_tick_spacing_var = tk.StringVar(value=DEFAULTS['freq_tick_spacing'])
+        self.vel_tick_spacing_var = tk.StringVar(value=DEFAULTS['vel_tick_spacing'])
+        self.cmap_var = tk.StringVar(value=DEFAULTS['cmap'])
 
         self._build_menu()
         self._build_ui()
@@ -417,29 +359,29 @@ class SimpleMASWGUI:
     
     def _reset_advanced_defaults(self):
         """Reset all advanced settings to default values."""
-        self.grid_fk_var.set(self._DEFAULTS['grid_fk'])
-        self.tol_fk_var.set(self._DEFAULTS['tol_fk'])
-        self.grid_ps_var.set(self._DEFAULTS['grid_ps'])
-        self.vspace_ps_var.set(self._DEFAULTS['vspace_ps'])
-        self.tol_ps_var.set(self._DEFAULTS['tol_ps'])
-        self.vibrosis_mode.set(self._DEFAULTS['vibrosis'])
-        self.cylindrical_var.set(self._DEFAULTS['cylindrical'])
-        self.downsample_var.set(self._DEFAULTS['downsample'])
-        self.down_factor_var.set(self._DEFAULTS['down_factor'])
-        self.numf_var.set(self._DEFAULTS['numf'])
-        self.power_threshold_var.set(self._DEFAULTS['power_threshold'])
-        self.auto_vel_limits_var.set(self._DEFAULTS['auto_vel_limits'])
-        self.auto_freq_limits_var.set(self._DEFAULTS['auto_freq_limits'])
-        self.plot_min_vel_var.set(self._DEFAULTS['plot_min_vel'])
-        self.plot_max_vel_var.set(self._DEFAULTS['plot_max_vel'])
-        self.plot_min_freq_var.set(self._DEFAULTS['plot_min_freq'])
-        self.plot_max_freq_var.set(self._DEFAULTS['plot_max_freq'])
-        self.freq_tick_spacing_var.set(self._DEFAULTS['freq_tick_spacing'])
-        self.vel_tick_spacing_var.set(self._DEFAULTS['vel_tick_spacing'])
-        self.cmap_var.set(self._DEFAULTS['cmap'])
-        self.dpi_var.set(self._DEFAULTS['dpi'])
-        self.export_spectra_var.set(self._DEFAULTS['export_spectra'])
-        self.dx_var.set(self._DEFAULTS['dx'])
+        self.grid_fk_var.set(DEFAULTS['grid_fk'])
+        self.tol_fk_var.set(DEFAULTS['tol_fk'])
+        self.grid_ps_var.set(DEFAULTS['grid_ps'])
+        self.vspace_ps_var.set(DEFAULTS['vspace_ps'])
+        self.tol_ps_var.set(DEFAULTS['tol_ps'])
+        self.vibrosis_mode.set(DEFAULTS['vibrosis'])
+        self.cylindrical_var.set(DEFAULTS['cylindrical'])
+        self.downsample_var.set(DEFAULTS['downsample'])
+        self.down_factor_var.set(DEFAULTS['down_factor'])
+        self.numf_var.set(DEFAULTS['numf'])
+        self.power_threshold_var.set(DEFAULTS['power_threshold'])
+        self.auto_vel_limits_var.set(DEFAULTS['auto_vel_limits'])
+        self.auto_freq_limits_var.set(DEFAULTS['auto_freq_limits'])
+        self.plot_min_vel_var.set(DEFAULTS['plot_min_vel'])
+        self.plot_max_vel_var.set(DEFAULTS['plot_max_vel'])
+        self.plot_min_freq_var.set(DEFAULTS['plot_min_freq'])
+        self.plot_max_freq_var.set(DEFAULTS['plot_max_freq'])
+        self.freq_tick_spacing_var.set(DEFAULTS['freq_tick_spacing'])
+        self.vel_tick_spacing_var.set(DEFAULTS['vel_tick_spacing'])
+        self.cmap_var.set(DEFAULTS['cmap'])
+        self.dpi_var.set(DEFAULTS['dpi'])
+        self.export_spectra_var.set(DEFAULTS['export_spectra'])
+        self.dx_var.set(DEFAULTS['dx'])
         self._toggle_vel_limits()
         self._toggle_freq_limits()
     
@@ -1325,75 +1267,9 @@ class SimpleMASWGUI:
         self._render_fig_preview()
 
     # --- icon helper ---
-    def _asset_path(self, name: str) -> str:
-        """Locate asset file, handling both exact names and @NxN suffixed variants."""
-        base = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "assets_big"))
-        if not os.path.isdir(base):
-            return os.path.join(base, name)  # return path anyway
-        # Try exact match first
-        p = os.path.join(base, name)
-        if os.path.isfile(p):
-            return p
-        # fallback: pick the largest file that starts with the prefix
-        prefix = os.path.splitext(name)[0]
-        try:
-            best = None; best_area = -1
-            for fn in os.listdir(base):
-                # Match prefix (e.g., "ic_open" matches "ic_open@180x180.png")
-                if fn.lower().startswith(prefix.lower()) and fn.lower().endswith('.png'):
-                    cand = os.path.join(base, fn)
-                    try:
-                        from PIL import Image
-                        with Image.open(cand) as im:
-                            w, h = im.size
-                            if w*h > best_area:
-                                best = cand; best_area = w*h
-                    except Exception:
-                        continue
-            if best:
-                return best
-        except Exception:
-            pass
-        return p
-
     def _load_icon(self, name: str, size: int) -> tk.PhotoImage | None:
-        """Load and cache an icon, maintaining aspect ratio with proper scaling."""
-        try:
-            key = f"{name}:{size}"
-            if key in self._icons:
-                return self._icons[key]
-            from PIL import Image, ImageTk
-            p = self._asset_path(name)
-            if not os.path.isfile(p):
-                return None
-            im = Image.open(p).convert("RGBA")
-
-            # Auto-crop transparent margins
-            alpha = im.split()[-1]
-            bbox = alpha.getbbox()
-            if bbox:
-                im = im.crop(bbox)
-
-            # Calculate scaling to fit within size x size while maintaining aspect ratio
-            orig_w, orig_h = im.size
-            scale = min(size / orig_w, size / orig_h)
-            new_w = int(orig_w * scale)
-            new_h = int(orig_h * scale)
-
-            # Resize maintaining aspect ratio with high-quality resampling
-            im = im.resize((new_w, new_h), Image.Resampling.LANCZOS)
-
-            # Create transparent background and center the icon
-            bg = Image.new("RGBA", (size, size), (255, 255, 255, 0))
-            offset_x = (size - new_w) // 2
-            offset_y = (size - new_h) // 2
-            bg.paste(im, (offset_x, offset_y), im)
-
-            tkimg = ImageTk.PhotoImage(bg)
-            self._icons[key] = tkimg
-            return tkimg
-        except Exception:
-            return None
+        """Load and cache an icon using the utility function."""
+        return load_icon(self._icons, name, size)
 
     def _open_selected_figure(self):
         sel = self.fig_list.selection()
