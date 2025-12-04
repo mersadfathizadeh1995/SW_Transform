@@ -645,10 +645,18 @@ class MASW2DTab:
             messagebox.showinfo("Import", "All project files already added.")
     
     def _add_shot_files(self):
-        """Add shot files via dialog with auto-detection of offsets."""
+        """Add shot files via dialog with auto-detection of offsets.
+        
+        Supports both SEG-2 (.dat/.sg2) and Vibrosis (.mat) files.
+        """
         files = filedialog.askopenfilenames(
             title="Select Shot Files",
-            filetypes=[("SEG-2 files", "*.dat *.sg2"), ("All files", "*.*")]
+            filetypes=[
+                ("All supported", "*.dat *.sg2 *.mat"),
+                ("SEG-2 files", "*.dat *.sg2"),
+                ("Vibrosis .mat", "*.mat"),
+                ("All files", "*.*")
+            ]
         )
         if files:
             # Get array configuration for calculating source position
@@ -659,15 +667,23 @@ class MASW2DTab:
             except ValueError:
                 array_length = 46.0  # Default
             
-            # Try to auto-detect offsets from filenames
+            # Separate .mat and SEG-2 files
+            seg2_files = [f for f in files if not f.lower().endswith('.mat')]
+            mat_files = [f for f in files if f.lower().endswith('.mat')]
+            
+            # Try to auto-detect offsets from SEG-2 filenames
             from sw_transform.io.file_assignment import assign_files
             try:
-                rows = assign_files(files, recursive=False, include_unknown=True)
-                file_info = {str(r.file_path): r for r in rows}
+                if seg2_files:
+                    rows = assign_files(seg2_files, recursive=False, include_unknown=True)
+                    file_info = {str(r.file_path): r for r in rows}
+                else:
+                    file_info = {}
             except Exception:
                 file_info = {}
             
-            for f in files:
+            # Process SEG-2 files
+            for f in seg2_files:
                 if f not in self.shot_files:
                     self.shot_files.append(f)
                     base = os.path.basename(f)
@@ -690,10 +706,50 @@ class MASW2DTab:
                         is_reverse = False
                         source_pos = array_length  # Default: at array end
                     
-                    shot_info = {"file": f, "offset": offset_str, "reverse": is_reverse, "source_position": source_pos}
+                    shot_info = {"file": f, "offset": offset_str, "reverse": is_reverse, 
+                                 "source_position": source_pos, "file_type": "seg2"}
                     self.shot_data.append(shot_info)
                     rev_mark = "Yes" if is_reverse else "No"
                     self.shot_tree.insert("", "end", values=(base, offset_str, rev_mark, f"{source_pos:.1f}m"))
+            
+            # Process .mat files
+            for f in mat_files:
+                if f not in self.shot_files:
+                    self.shot_files.append(f)
+                    base = os.path.basename(f)
+                    
+                    # Try to get vibrosis file info
+                    try:
+                        from sw_transform.processing.vibrosis import get_vibrosis_file_info
+                        info = get_vibrosis_file_info(f)
+                        n_channels = info.get('n_channels')
+                        parsed_offset = info.get('parsed_offset')
+                        if parsed_offset is not None:
+                            source_pos = float(parsed_offset)
+                            sign = "+" if source_pos >= 0 else ""
+                            offset_str = f"{sign}{int(round(source_pos))}"
+                        else:
+                            offset_str = "+0"
+                            source_pos = array_length
+                    except Exception:
+                        offset_str = "+0"
+                        source_pos = array_length
+                        n_channels = None
+                    
+                    is_reverse = False  # .mat files don't have reverse concept
+                    
+                    shot_info = {"file": f, "offset": offset_str, "reverse": is_reverse,
+                                 "source_position": source_pos, "file_type": "mat",
+                                 "n_channels": n_channels}
+                    self.shot_data.append(shot_info)
+                    rev_mark = "No"
+                    self.shot_tree.insert("", "end", values=(base, offset_str, rev_mark, f"{source_pos:.1f}m"))
+            
+            # Auto-enable vibrosis mode if .mat files added
+            if mat_files:
+                self.vibrosis_var.set(True)
+                self.cylindrical_var.set(True)
+                self.log(f"Added {len(mat_files)} vibrosis .mat files - FDBF mode enabled")
     
     def _clear_shot_files(self):
         """Clear all shot files."""
@@ -1000,7 +1056,12 @@ class MASW2DTab:
         return config
     
     def _run_workflow(self):
-        """Run the 2D MASW workflow."""
+        """Run the 2D MASW workflow.
+        
+        Automatically detects file type and runs appropriate workflow:
+        - SEG-2 files (.dat/.sg2): Standard MASW workflow
+        - Vibrosis .mat files: Vibrosis MASW workflow (FDBF only)
+        """
         try:
             config = self._build_config()
         except ValueError as e:
@@ -1016,6 +1077,37 @@ class MASW2DTab:
             messagebox.showwarning("No Output", "Please select an output directory.")
             return
         
+        # Detect file types
+        mat_files = [f for f in self.shot_files if f.lower().endswith('.mat')]
+        seg2_files = [f for f in self.shot_files if not f.lower().endswith('.mat')]
+        
+        # Check for mixed files (not recommended)
+        if mat_files and seg2_files:
+            result = messagebox.askyesno(
+                "Mixed File Types",
+                f"You have both .mat ({len(mat_files)}) and SEG-2 ({len(seg2_files)}) files.\n\n"
+                "It's recommended to process them separately.\n"
+                "Do you want to continue with .mat files only?\n\n"
+                "(Click No to process SEG-2 files only)"
+            )
+            if result:
+                # Process only .mat files
+                seg2_files = []
+            else:
+                # Process only SEG-2 files
+                mat_files = []
+        
+        # Determine workflow type
+        use_vibrosis = len(mat_files) > 0
+        
+        # For vibrosis, warn if non-FDBF method selected
+        if use_vibrosis and self.method_var.get() != "fdbf":
+            messagebox.showinfo(
+                "Vibrosis Mode",
+                "Vibrosis .mat files can only use FDBF method.\n"
+                "Processing will use FDBF regardless of selection."
+            )
+        
         # Disable run button
         self.status_label.config(text="Running...")
         self.progress_var.set(0)
@@ -1023,33 +1115,61 @@ class MASW2DTab:
         # Run in thread
         def run_thread():
             try:
-                from sw_transform.masw2d.workflows import StandardMASWWorkflow
-                
-                workflow = StandardMASWWorkflow(config)
-                
-                # Get parallel settings
-                parallel = self.parallel_var.get()
-                workers = self.worker_var.get()
-                max_workers = None if workers == "auto" else int(workers)
-                
-                def progress_cb(current, total, msg):
-                    pct = (current / total * 100) if total > 0 else 0
-                    self.parent.after(0, lambda: self.progress_var.set(pct))
-                    self.parent.after(0, lambda: self.status_label.config(text=msg))
-                
-                # Set progress callback before running
-                workflow.set_progress_callback(progress_cb)
-                
-                results = workflow.run(
-                    output_dir=output_dir,
-                    parallel=parallel,
-                    max_workers=max_workers
-                )
+                if use_vibrosis:
+                    # Use Vibrosis workflow
+                    from sw_transform.masw2d.workflows import VibrosisMASWWorkflow
+                    
+                    # Add mat_files to config
+                    config['mat_files'] = mat_files
+                    # Force cylindrical steering for vibrosis
+                    if 'processing' not in config:
+                        config['processing'] = {}
+                    config['processing']['cylindrical'] = True
+                    
+                    workflow = VibrosisMASWWorkflow(config)
+                    
+                    def progress_cb(current, total, msg):
+                        pct = (current / total * 100) if total > 0 else 0
+                        self.parent.after(0, lambda: self.progress_var.set(pct))
+                        self.parent.after(0, lambda: self.status_label.config(text=msg))
+                    
+                    workflow.set_progress_callback(progress_cb)
+                    
+                    results = workflow.run(
+                        mat_files=mat_files,
+                        output_dir=output_dir
+                    )
+                else:
+                    # Use Standard MASW workflow
+                    from sw_transform.masw2d.workflows import StandardMASWWorkflow
+                    
+                    workflow = StandardMASWWorkflow(config)
+                    
+                    # Get parallel settings
+                    parallel = self.parallel_var.get()
+                    workers = self.worker_var.get()
+                    max_workers = None if workers == "auto" else int(workers)
+                    
+                    def progress_cb(current, total, msg):
+                        pct = (current / total * 100) if total > 0 else 0
+                        self.parent.after(0, lambda: self.progress_var.set(pct))
+                        self.parent.after(0, lambda: self.status_label.config(text=msg))
+                    
+                    # Set progress callback before running
+                    workflow.set_progress_callback(progress_cb)
+                    
+                    results = workflow.run(
+                        output_dir=output_dir,
+                        parallel=parallel,
+                        max_workers=max_workers
+                    )
                 
                 self.parent.after(0, lambda: self._on_workflow_complete(results))
                 
             except Exception as e:
-                self.parent.after(0, lambda: self._on_workflow_error(str(e)))
+                import traceback
+                error_msg = f"{str(e)}\n\n{traceback.format_exc()}"
+                self.parent.after(0, lambda: self._on_workflow_error(error_msg))
         
         thread = threading.Thread(target=run_thread, daemon=True)
         thread.start()

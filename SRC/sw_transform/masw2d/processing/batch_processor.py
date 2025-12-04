@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, Optional
 import numpy as np
 
 from ..extraction.subarray_extractor import ExtractedSubArray
+from ..extraction.vibrosis_extractor import ExtractedVibrosisSubArray
 
 
 @dataclass
@@ -248,6 +249,119 @@ def process_subarray(
     )
 
 
+def process_vibrosis_subarray(
+    extracted: ExtractedVibrosisSubArray,
+    freq_min: float = 5.0,
+    freq_max: float = 80.0,
+    velocity_min: float = 100.0,
+    velocity_max: float = 1500.0,
+    grid_n: int = 4000,
+    vspace: str = "linear",
+    cylindrical: bool = True,
+    power_threshold: float = 0.1,
+    **kwargs
+) -> DispersionResult:
+    """Process a vibrosis sub-array from .mat file to get dispersion curve.
+    
+    Uses FDBF transform on the pre-computed cross-spectral matrix R.
+    Note: Only FDBF method is supported for vibrosis .mat files.
+    
+    Parameters
+    ----------
+    extracted : ExtractedVibrosisSubArray
+        Extracted vibrosis sub-array data with R matrix
+    freq_min : float
+        Minimum frequency (Hz)
+    freq_max : float
+        Maximum frequency (Hz)
+    velocity_min : float
+        Minimum velocity (m/s)
+    velocity_max : float
+        Maximum velocity (m/s)
+    grid_n : int
+        Number of velocity grid points
+    vspace : str
+        Velocity spacing: 'log' or 'linear'
+    cylindrical : bool
+        If True, use cylindrical steering (recommended for vibrosis)
+    power_threshold : float
+        Minimum normalized power for valid picks
+    **kwargs
+        Additional parameters (ignored)
+        
+    Returns
+    -------
+    DispersionResult
+        Dispersion analysis result
+    """
+    from sw_transform.processing.fdbf import (
+        fdbf_transform_from_R_vectorized,
+        analyze_fdbf_spectrum
+    )
+    
+    # Get pre-computed R matrix and frequencies
+    R = extracted.R  # Shape: (n_channels, n_channels, n_frequencies)
+    frequencies = extracted.frequencies
+    dx = extracted.dx
+    
+    # FDBF transform from R matrix (only valid method for vibrosis)
+    steering = 'cylindrical' if cylindrical else 'plane'
+    freq_out, velocities, power = fdbf_transform_from_R_vectorized(
+        R, frequencies, dx,
+        fmin=freq_min, fmax=freq_max,
+        nvel=grid_n, vmin=velocity_min, vmax=velocity_max,
+        vspace=vspace, steering=steering
+    )
+    
+    # Analyze: pick peaks
+    pnorm, vmax, wav, freq_out = analyze_fdbf_spectrum(
+        freq_out, velocities, power,
+        normalization="frequency-maximum",
+        power_threshold=power_threshold,
+        velocity_min=velocity_min,
+        velocity_max=velocity_max
+    )
+    
+    # Calculate wavelengths
+    wavelengths = np.zeros_like(vmax)
+    for i, (fi, vi) in enumerate(zip(freq_out, vmax)):
+        if fi > 0 and not np.isnan(vi):
+            wavelengths[i] = vi / fi
+        else:
+            wavelengths[i] = np.nan
+    
+    # Build metadata
+    shot_file = extracted.shot_info.file if extracted.shot_info else "vibrosis.mat"
+    source_offset = extracted.shot_info.source_position if extracted.shot_info else 0.0
+    
+    return DispersionResult(
+        frequencies=freq_out,
+        velocities=velocities,
+        power=pnorm,
+        picked_velocities=vmax,
+        wavelengths=wavelengths,
+        midpoint=extracted.midpoint,
+        subarray_config=extracted.config_name,
+        shot_file=shot_file,
+        source_offset=source_offset,
+        direction="forward",  # Vibrosis typically forward propagation
+        method="fdbf",
+        metadata={
+            "freq_min": freq_min,
+            "freq_max": freq_max,
+            "velocity_min": velocity_min,
+            "velocity_max": velocity_max,
+            "grid_n": grid_n,
+            "source_type": "vibrosis",
+            "cylindrical": cylindrical,
+            "power_threshold": power_threshold,
+            "n_channels": extracted.n_channels,
+            "subarray_length": extracted.subarray_def.length if extracted.subarray_def else 0,
+            "file_type": "mat"
+        }
+    )
+
+
 def process_batch(
     extracted_list: List[ExtractedSubArray],
     method: str = "ps",
@@ -288,6 +402,52 @@ def process_batch(
             warnings.warn(
                 f"Failed to process sub-array at midpoint {extracted.midpoint:.1f}m "
                 f"from {extracted.shot_info.file}: {e}"
+            )
+        
+        if progress_callback:
+            progress_callback(i + 1, total)
+    
+    return results
+
+
+def process_vibrosis_batch(
+    extracted_list: List[ExtractedVibrosisSubArray],
+    processing_params: Optional[Dict[str, Any]] = None,
+    progress_callback: Optional[Callable[[int, int], None]] = None
+) -> List[DispersionResult]:
+    """Process multiple vibrosis sub-arrays.
+    
+    Note: Only FDBF method is supported for vibrosis .mat files.
+    
+    Parameters
+    ----------
+    extracted_list : list of ExtractedVibrosisSubArray
+        List of extracted vibrosis sub-arrays to process
+    processing_params : dict, optional
+        Processing parameters (freq_min, freq_max, etc.)
+    progress_callback : callable, optional
+        Callback function(current, total) for progress reporting
+    
+    Returns
+    -------
+    list of DispersionResult
+        Results for each sub-array
+    """
+    params = processing_params.copy() if processing_params else {}
+    # Remove 'method' if present - only FDBF is supported
+    params.pop('method', None)
+    
+    results = []
+    total = len(extracted_list)
+    
+    for i, extracted in enumerate(extracted_list):
+        try:
+            result = process_vibrosis_subarray(extracted, **params)
+            results.append(result)
+        except Exception as e:
+            import warnings
+            warnings.warn(
+                f"Failed to process vibrosis sub-array at midpoint {extracted.midpoint:.1f}m: {e}"
             )
         
         if progress_callback:
