@@ -159,10 +159,12 @@ def organize_results(
             filename = _generate_filename(result, ext=".png")
             filepath = os.path.join(subdir, filename)
             try:
-                # Default to auto velocity limit if not specified
+                # Default to auto velocity/frequency limit if not specified
                 img_params = image_params.copy()
                 if 'auto_velocity_limit' not in img_params:
                     img_params['auto_velocity_limit'] = True
+                if 'auto_frequency_limit' not in img_params:
+                    img_params['auto_frequency_limit'] = True
                 export_dispersion_image(result, filepath, **img_params)
                 exported_files.append(filepath)
             except Exception as e:

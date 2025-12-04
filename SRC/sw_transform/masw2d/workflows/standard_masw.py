@@ -258,15 +258,19 @@ class StandardMASWWorkflow(BaseWorkflow):
         output_config = self.config.get("output", {})
         export_formats = output_config.get("export_formats", ["csv"])
         organize_by = output_config.get("organize_by", "midpoint")
-        # Check both include_images flag and 'image' in export_formats
-        include_images = output_config.get("include_images", False) or ("image" in export_formats)
+        # Check both include_images flag and image formats in export_formats
+        include_images = (
+            output_config.get("include_images", False) or 
+            any(fmt in export_formats for fmt in ("image", "png", "jpg", "jpeg"))
+        )
         
         # Image parameters - only include max_velocity if explicitly set
         image_params = {
             "max_frequency": output_config.get("max_frequency", None),
             "cmap": output_config.get("cmap", "jet"),
             "dpi": output_config.get("image_dpi", 150),
-            "auto_velocity_limit": output_config.get("auto_velocity_limit", True)
+            "auto_velocity_limit": output_config.get("auto_velocity_limit", True),
+            "auto_frequency_limit": output_config.get("auto_frequency_limit", True)
         }
         # Only set max_velocity if explicitly configured (not auto)
         if "max_velocity" in output_config and not output_config.get("auto_velocity_limit", True):

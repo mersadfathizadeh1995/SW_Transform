@@ -111,9 +111,9 @@ def extract_vibrosis_subarray(
     R = compute_subarray_cross_spectral_matrix(tf_subarray)
     
     # Calculate source offset
-    source_offset = calculate_source_offset(
-        shot_info.source_position,
-        subarray_def.midpoint
+    source_offset, _ = calculate_source_offset(
+        shot_info,
+        subarray_def
     )
     
     return ExtractedVibrosisSubArray(
@@ -199,12 +199,14 @@ def extract_all_vibrosis_subarrays_from_shot(
         
         # Check if this is a valid sub-array for this shot
         # (based on shot type and sub-array position)
-        source_offset = calculate_source_offset(
-            shot_info.source_position,
-            subarray_def.midpoint
+        source_offset, _ = calculate_source_offset(
+            shot_info,
+            subarray_def
         )
         
-        if not is_valid_offset(source_offset, shot_info.shot_type):
+        # For vibrosis, we're more relaxed about offset validation since
+        # the transfer functions are pre-computed. Only reject if offset is 0 or negative
+        if source_offset <= 0:
             continue
         
         try:
@@ -288,7 +290,7 @@ def extract_all_vibrosis_subarrays(
         shot_info = ShotInfo(
             file="vibrosis.mat",
             source_position=0.0,
-            receiver_start=0.0
+            shot_type=ShotType.EXTERIOR_LEFT
         )
     
     return extract_all_vibrosis_subarrays_from_shot(

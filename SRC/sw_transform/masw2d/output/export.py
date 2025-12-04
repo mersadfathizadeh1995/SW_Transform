@@ -122,6 +122,7 @@ def export_dispersion_image(
     cmap: str = "jet",
     dpi: int = 150,
     auto_velocity_limit: bool = True,
+    auto_frequency_limit: bool = True,
     fill_nan: bool = True,
     nan_color: str = "lightgray"
 ) -> str:
@@ -147,6 +148,9 @@ def export_dispersion_image(
     auto_velocity_limit : bool
         If True and max_velocity is None, automatically determine velocity limit
         from picks (max pick velocity + 20% margin, rounded to nice number)
+    auto_frequency_limit : bool
+        If True and max_frequency is None, automatically determine frequency limit
+        from the data range (max frequency with significant power + margin)
     fill_nan : bool
         If True, fill NaN/masked regions with nan_color instead of white
     nan_color : str
@@ -171,7 +175,30 @@ def export_dispersion_image(
     # Get frequency limits from metadata or use defaults
     if min_frequency is None:
         min_frequency = result.metadata.get('freq_min', 5.0)
-    if max_frequency is None:
+    
+    # Auto-detect max frequency from data if requested
+    if max_frequency is None and auto_frequency_limit:
+        # Find max frequency with significant power
+        power_threshold_detect = 0.05
+        max_pwr = np.nanmax(power)
+        if max_pwr > 0 and len(freqs) > 0:
+            # Check each frequency column for significant power
+            sig_power_per_freq = np.nanmax(power, axis=0)  # Max power at each frequency
+            sig_mask = sig_power_per_freq > power_threshold_detect * max_pwr
+            if np.any(sig_mask):
+                max_f_idx = np.max(np.where(sig_mask)[0])
+                detected_max_f = freqs[min(max_f_idx + 2, len(freqs) - 1)]  # Add small margin
+                # Also consider picks
+                valid_picks_mask = ~np.isnan(picks)
+                if np.any(valid_picks_mask):
+                    max_pick_freq = freqs[np.max(np.where(valid_picks_mask)[0])]
+                    detected_max_f = max(detected_max_f, max_pick_freq * 1.1)
+                max_frequency = _round_freq_to_nice_number(detected_max_f * 1.05)
+            else:
+                max_frequency = result.metadata.get('freq_max', freqs[-1] if len(freqs) > 0 else 80.0)
+        else:
+            max_frequency = result.metadata.get('freq_max', freqs[-1] if len(freqs) > 0 else 80.0)
+    elif max_frequency is None:
         max_frequency = result.metadata.get('freq_max', freqs[-1] if len(freqs) > 0 else 80.0)
     
     # Get velocity limits - prefer metadata, then auto-detect
@@ -287,6 +314,26 @@ def _round_to_nice_number(value: float) -> float:
             return nice * magnitude
     
     return 10.0 * magnitude
+
+
+def _round_freq_to_nice_number(value: float) -> float:
+    """Round a frequency value up to a 'nice' number for axis limits.
+    
+    Nice numbers for frequency: 10, 15, 20, 25, 30, 40, 50, 60, 80, 100 Hz etc.
+    """
+    if value <= 0:
+        return 10.0
+    
+    # Common nice frequency values
+    nice_freqs = [5, 10, 15, 20, 25, 30, 40, 50, 60, 80, 100, 120, 150, 200]
+    
+    for nice in nice_freqs:
+        if value <= nice:
+            return float(nice)
+    
+    # For larger values, round up to nearest 50
+    import math
+    return float(math.ceil(value / 50) * 50)
 
 
 def export_batch_csv(

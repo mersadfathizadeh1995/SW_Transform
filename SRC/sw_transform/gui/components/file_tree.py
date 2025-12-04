@@ -246,6 +246,7 @@ class FileTreePanel(tk.Frame):
             }
         return result
     
+    @property
     def has_mat_files(self) -> bool:
         """Check if any .mat files are loaded.
         
@@ -253,6 +254,28 @@ class FileTreePanel(tk.Frame):
             True if any files have type 'mat'.
         """
         return any(t == 'mat' for t in self.file_types.values())
+    
+    def update_offsets(self, new_offsets: dict[str, str]):
+        """Update offset values for files.
+        
+        Args:
+            new_offsets: Dict mapping base name to offset string
+        """
+        for base, offset in new_offsets.items():
+            if base in self.offsets:
+                self.offsets[base] = offset
+        self._refresh()
+    
+    def update_reverse_flags(self, new_flags: dict[str, bool]):
+        """Update reverse flags for files.
+        
+        Args:
+            new_flags: Dict mapping base name to reverse flag
+        """
+        for base, flag in new_flags.items():
+            if base in self.reverse_flags:
+                self.reverse_flags[base] = flag
+        self._refresh()
     
     def selection(self):
         """Get treeview selection (for compatibility)."""

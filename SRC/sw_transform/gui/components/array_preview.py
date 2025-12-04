@@ -199,3 +199,28 @@ class ArrayPreviewPanel(tk.LabelFrame):
             except Exception:
                 pass
             self.canvas_widget = None
+    
+    def set_figure(self, fig):
+        """Set and display a matplotlib Figure.
+        
+        Args:
+            fig: A matplotlib Figure object to display
+        """
+        try:
+            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+            
+            # Clear existing canvas
+            if self.canvas_widget is not None:
+                try:
+                    self.canvas_widget.destroy()
+                except Exception:
+                    pass
+            
+            # Mount new canvas
+            canvas = FigureCanvasTkAgg(fig, master=self.prev_host)
+            self.canvas_widget = canvas.get_tk_widget()
+            self.canvas_widget.pack(fill="both", expand=True)
+            canvas.draw()
+        except Exception as e:
+            from tkinter import messagebox
+            messagebox.showerror("Preview", str(e))

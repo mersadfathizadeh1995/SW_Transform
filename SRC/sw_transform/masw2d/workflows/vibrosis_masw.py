@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .base import BaseWorkflow
 from ..config.loader import load_config
-from ..geometry.shot_classifier import ShotInfo
+from ..geometry.shot_classifier import ShotInfo, ShotType
 from ..geometry.subarray import SubArrayDef, get_all_subarrays_from_config, flatten_subarrays
 from ..extraction.vibrosis_extractor import (
     ExtractedVibrosisSubArray,
@@ -183,6 +183,15 @@ class VibrosisMASWWorkflow(BaseWorkflow):
         all_results: List[DispersionResult] = []
         total_files = len(mat_files)
         
+        # Build mapping from file path to source_position from shots config
+        shots_config = self.config.get("shots", [])
+        source_positions = {}
+        for shot in shots_config:
+            shot_file = shot.get("file", "")
+            # Normalize path for comparison
+            shot_file_norm = str(Path(shot_file).resolve()) if shot_file else ""
+            source_positions[shot_file_norm] = shot.get("source_position", 0.0)
+        
         self._report_progress(0, total_files, "Starting vibrosis processing...")
         
         for file_idx, mat_file in enumerate(mat_files):
@@ -196,11 +205,16 @@ class VibrosisMASWWorkflow(BaseWorkflow):
                 # Load vibrosis data
                 vibrosis_data = load_vibrosis_mat(str(mat_path))
                 
+                # Get source_position from shots config, default to 0.0 if not found
+                mat_path_norm = str(mat_path.resolve())
+                source_pos = source_positions.get(mat_path_norm, 0.0)
+                
                 # Create shot info for this file
+                # For vibrosis we typically have source outside array
                 shot_info = ShotInfo(
                     file=str(mat_path),
-                    source_position=0.0,  # Will be updated per sub-array
-                    receiver_start=self.config.get("array", {}).get("first_receiver", 0.0)
+                    source_position=source_pos,
+                    shot_type=ShotType.EXTERIOR_LEFT  # Default for vibrosis
                 )
                 
                 # Extract all sub-arrays
@@ -239,14 +253,18 @@ class VibrosisMASWWorkflow(BaseWorkflow):
         output_config = self.config.get("output", {})
         export_formats = output_config.get("export_formats", ["csv"])
         organize_by = output_config.get("organize_by", "midpoint")
-        include_images = output_config.get("include_images", False) or ("image" in export_formats)
+        include_images = (
+            output_config.get("include_images", False) or 
+            any(fmt in export_formats for fmt in ("image", "png", "jpg", "jpeg"))
+        )
         
         # Image parameters
         image_params = {
             "max_frequency": output_config.get("max_frequency", None),
             "cmap": output_config.get("cmap", "jet"),
             "dpi": output_config.get("image_dpi", 150),
-            "auto_velocity_limit": output_config.get("auto_velocity_limit", True)
+            "auto_velocity_limit": output_config.get("auto_velocity_limit", True),
+            "auto_frequency_limit": output_config.get("auto_frequency_limit", True)
         }
         if "max_velocity" in output_config and not output_config.get("auto_velocity_limit", True):
             image_params["max_velocity"] = output_config["max_velocity"]
@@ -363,7 +381,7 @@ def process_mat_file_direct(
     shot_info = ShotInfo(
         file=mat_file,
         source_position=0.0,
-        receiver_start=0.0
+        shot_type=ShotType.EXTERIOR_LEFT
     )
     
     # Extract all sub-arrays

@@ -83,6 +83,9 @@ class FileManagerPanel(ttk.LabelFrame):
         self.shot_tree.column("Rev", width=35)
         self.shot_tree.column("Source Pos", width=70)
         self.shot_tree.pack(fill="x", pady=4)
+        
+        # Bind double-click for offset editing
+        self.shot_tree.bind("<Double-1>", self._edit_cell)
     
     def _import_from_project(self):
         """Import files from main project panel with offsets.
@@ -288,3 +291,142 @@ class FileManagerPanel(ttk.LabelFrame):
     def clear(self):
         """Public method to clear all files."""
         self._clear_shot_files()
+
+    def sync_from_main_app(self):
+        """Sync files from main app automatically.
+        
+        Called when MASW 2D tab is activated. Only adds new files
+        that aren't already in the list.
+        """
+        if not self.main_app or not hasattr(self.main_app, 'file_list'):
+            return
+        
+        if not self.main_app.file_list:
+            return
+        
+        # Check which files are already in the list
+        existing_files = set(self.shot_files)
+        new_files = [f for f in self.main_app.file_list if f not in existing_files]
+        
+        if not new_files:
+            return
+        
+        array_length = self.get_array_length()
+        count = 0
+        
+        for filepath in new_files:
+            base = os.path.splitext(os.path.basename(filepath))[0]
+            ext = os.path.splitext(filepath)[1].lower()
+            
+            # Determine file type
+            file_type = 'mat' if ext == '.mat' else 'seg2'
+            
+            # Get offset and reverse from main app
+            offset_str = self.main_app.offsets.get(base, "+0")
+            is_reverse = self.main_app.reverse_flags.get(base, False)
+            
+            # Parse offset as absolute source position
+            try:
+                source_pos = float(offset_str)
+            except ValueError:
+                source_pos = array_length
+            
+            # For .mat files, try to get channel count
+            n_channels = None
+            if file_type == 'mat':
+                try:
+                    from sw_transform.processing.vibrosis import detect_array_from_mat
+                    info = detect_array_from_mat(filepath)
+                    n_channels = info.get('n_channels')
+                except Exception:
+                    pass
+            
+            shot_info = {
+                "file": filepath,
+                "offset": offset_str,
+                "reverse": is_reverse,
+                "source_position": source_pos,
+                "file_type": file_type,
+                "n_channels": n_channels
+            }
+            self.shot_data.append(shot_info)
+            self.shot_files.append(filepath)
+            rev_mark = "Yes" if is_reverse else "No"
+            type_label = "MAT" if file_type == 'mat' else "SEG2"
+            self.shot_tree.insert("", "end", values=(
+                base, type_label, offset_str, rev_mark, f"{source_pos:.1f}m"
+            ))
+            count += 1
+        
+        if count > 0:
+            self.log(f"Auto-synced {count} files from main app")
+            if self.on_files_changed:
+                self.on_files_changed()
+
+    def _edit_cell(self, ev):
+        """Handle double-click editing for offset and reverse columns.
+        
+        Columns: (File, Type, Offset, Rev, Source Pos)
+        - Column 1 (File): not editable
+        - Column 2 (Type): not editable
+        - Column 3 (Offset): editable text entry
+        - Column 4 (Rev): toggle Yes/No
+        - Column 5 (Source Pos): auto-calculated from offset
+        """
+        item = self.shot_tree.identify_row(ev.y)
+        col = self.shot_tree.identify_column(ev.x)
+        if not item:
+            return
+        
+        col_idx = int(col.lstrip("#"))
+        vals = list(self.shot_tree.item(item, "values"))
+        base = vals[0]  # File base name
+        
+        # Find the shot data entry
+        shot_idx = None
+        for i, shot in enumerate(self.shot_data):
+            if os.path.splitext(os.path.basename(shot["file"]))[0] == base:
+                shot_idx = i
+                break
+        
+        if shot_idx is None:
+            return
+        
+        if col_idx == 3:  # Offset column
+            x, y, w, h = self.shot_tree.bbox(item, col)
+            e = tk.Entry(self.winfo_toplevel())
+            e.insert(0, vals[2])  # Current offset
+            e.place(
+                x=x + self.shot_tree.winfo_rootx() - self.winfo_toplevel().winfo_rootx(),
+                y=y + self.shot_tree.winfo_rooty() - self.winfo_toplevel().winfo_rooty(),
+                width=w, height=h
+            )
+            e.focus()
+            e.select_range(0, tk.END)
+            
+            def _done(_):
+                new_offset = e.get().strip()
+                vals[2] = new_offset
+                # Update source position from offset
+                try:
+                    source_pos = float(new_offset)
+                except ValueError:
+                    source_pos = self.get_array_length()
+                vals[4] = f"{source_pos:.1f}m"
+                
+                # Update shot data
+                self.shot_data[shot_idx]["offset"] = new_offset
+                self.shot_data[shot_idx]["source_position"] = source_pos
+                
+                self.shot_tree.item(item, values=vals)
+                e.destroy()
+            
+            e.bind("<Return>", _done)
+            e.bind("<FocusOut>", _done)
+            
+        elif col_idx == 4:  # Reverse column - toggle Yes/No
+            current = vals[3] == "Yes"
+            new_val = not current
+            vals[3] = "Yes" if new_val else "No"
+            self.shot_data[shot_idx]["reverse"] = new_val
+            self.shot_tree.item(item, values=vals)

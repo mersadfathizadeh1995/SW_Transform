@@ -20,7 +20,7 @@ def dispatch(args) -> int:
 def cmd_run(args) -> int:
     """Run processing workflow."""
     from sw_transform.masw2d.config import load_config
-    from sw_transform.masw2d.workflows import StandardMASWWorkflow
+    from sw_transform.masw2d.workflows import StandardMASWWorkflow, VibrosisMASWWorkflow
     
     config_path = Path(args.config)
     if not config_path.exists():
@@ -48,8 +48,24 @@ def cmd_run(args) -> int:
     if args.max_frequency:
         config["output"]["max_frequency"] = args.max_frequency
     
-    # Create workflow
-    workflow = StandardMASWWorkflow(config)
+    # Determine workflow type based on file types
+    # Check if we have .mat files (vibrosis) or SEG-2 files
+    has_mat_files = bool(config.get("mat_files"))
+    shots = config.get("shots", [])
+    if not has_mat_files and shots:
+        has_mat_files = any(
+            shot.get("file_type") == "mat" or 
+            str(shot.get("file", "")).lower().endswith(".mat")
+            for shot in shots
+        )
+    
+    # Create appropriate workflow
+    if has_mat_files:
+        workflow = VibrosisMASWWorkflow(config)
+        workflow_type = "vibrosis"
+    else:
+        workflow = StandardMASWWorkflow(config)
+        workflow_type = "standard"
     
     # Progress callback
     if not args.quiet:
@@ -62,9 +78,15 @@ def cmd_run(args) -> int:
     
     if not args.quiet:
         print(f"Starting workflow: {info['survey_name']}")
-        print(f"  Shots: {info['n_exterior_shots']}")
-        print(f"  Sub-arrays/shot: {info['n_subarrays_per_shot']}")
-        print(f"  Expected DCs: {info['expected_results']}")
+        if workflow_type == "vibrosis":
+            print(f"  Type: Vibrosis (.mat files)")
+            print(f"  MAT files: {info.get('n_mat_files', 0)}")
+            print(f"  Sub-arrays/file: {info.get('n_subarrays_per_file', 0)}")
+            print(f"  Expected DCs: {info.get('expected_results', 0)}")
+        else:
+            print(f"  Shots: {info.get('n_exterior_shots', 0)}")
+            print(f"  Sub-arrays/shot: {info.get('n_subarrays_per_shot', 0)}")
+            print(f"  Expected DCs: {info.get('expected_results', 0)}")
         print()
     
     # Run
