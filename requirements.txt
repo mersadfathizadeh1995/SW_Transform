@@ -1,0 +1,19 @@
+# SW_Transform - Surface Wave Dispersion Analysis
+# Required dependencies for running the package
+
+# Core scientific computing
+numpy>=1.20.0
+scipy>=1.7.0
+matplotlib>=3.5.0
+
+# Image processing (for figure export and icons)
+Pillow>=9.0.0
+
+# PowerPoint export (optional but recommended)
+python-pptx>=0.6.21
+
+# Note: tkinter is part of Python standard library
+# On some Linux systems you may need to install it separately:
+#   Ubuntu/Debian: sudo apt-get install python3-tk
+#   Fedora: sudo dnf install python3-tkinter
+#   Arch: sudo pacman -S tk
