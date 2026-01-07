@@ -7,6 +7,9 @@ from sw_transform.gui.components.advanced_settings import AdvancedSettingsManage
 from sw_transform.gui.components.run_panel import RunPanel
 from sw_transform.gui.components.figure_gallery import FigureGallery
 from sw_transform.gui.components.array_preview import ArrayPreviewPanel
+from sw_transform.gui.components.array_config_panel import ArrayConfigPanel
+from sw_transform.gui.components.receiver_config_panel import ReceiverConfigPanel
+from sw_transform.gui.components.source_config_panel import SourceConfigPanel
 
 __all__ = [
     'ProgressPanel',
@@ -16,4 +19,7 @@ __all__ = [
     'RunPanel',
     'FigureGallery',
     'ArrayPreviewPanel',
+    'ArrayConfigPanel',
+    'ReceiverConfigPanel',
+    'SourceConfigPanel',
 ]

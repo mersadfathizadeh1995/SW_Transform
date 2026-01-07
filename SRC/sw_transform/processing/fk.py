@@ -22,8 +22,8 @@ def fk_transform(data, dt, dx, fmin=0.0, fmax=100.0, nvel=400, vmin=50.0, vmax=5
         Time-domain data matrix (nsamples, nchannels)
     dt : float
         Time sampling interval (seconds)
-    dx : float
-        Geophone spacing (meters)
+    dx : float or array-like
+        Geophone spacing (meters) or array of positions
     fmin, fmax : float
         Frequency range (Hz)
     nvel : int
@@ -45,7 +45,10 @@ def fk_transform(data, dt, dx, fmin=0.0, fmax=100.0, nvel=400, vmin=50.0, vmax=5
     nsamples, nchannels = data.shape
     
     # Receiver offsets (relative positions)
-    offsets = np.arange(nchannels) * dx
+    if np.isscalar(dx):
+        offsets = np.arange(nchannels) * dx
+    else:
+        offsets = np.asarray(dx)
     
     # Frequency vector
     df = 1.0 / (nsamples * dt)
@@ -241,7 +244,7 @@ def plot_freq_velocity_uniform(freq_sub, velocities, pnorm, vmax_picks, vmin_plo
     plt.colorbar(cf, label="Normalized Power")
     ax.plot(freq_sub, vmax_picks, 'o', mfc='none', mec='white', ms=4, label="Dispersion Picks")
     
-    ttl = title if offset_label == "" else f"{title}\nShot offset: {offset_label}"
+    ttl = title if offset_label == "" else f"{title}\n{offset_label}"
     ax.set_title(ttl)
     ax.set_xlabel("Frequency (Hz)")
     ax.set_ylabel("Phase Velocity (m/s)")

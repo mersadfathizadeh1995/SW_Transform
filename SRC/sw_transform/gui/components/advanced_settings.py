@@ -64,6 +64,7 @@ class AdvancedSettingsManager:
         self.power_threshold_var = tk.StringVar(value=DEFAULTS['power_threshold'])
         
         # Plot/export settings - lines 134-144
+        self.detailed_title_var = tk.BooleanVar(value=DEFAULTS['detailed_title'])
         self.auto_vel_limits_var = tk.BooleanVar(value=DEFAULTS['auto_vel_limits'])
         self.auto_freq_limits_var = tk.BooleanVar(value=DEFAULTS['auto_freq_limits'])
         self.plot_min_vel_var = tk.StringVar(value=DEFAULTS['plot_min_vel'])
@@ -109,6 +110,7 @@ class AdvancedSettingsManager:
         self.down_factor_var.set(DEFAULTS['down_factor'])
         self.numf_var.set(DEFAULTS['numf'])
         self.power_threshold_var.set(DEFAULTS['power_threshold'])
+        self.detailed_title_var.set(DEFAULTS['detailed_title'])
         self.auto_vel_limits_var.set(DEFAULTS['auto_vel_limits'])
         self.auto_freq_limits_var.set(DEFAULTS['auto_freq_limits'])
         self.plot_min_vel_var.set(DEFAULTS['plot_min_vel'])
@@ -365,6 +367,12 @@ class AdvancedSettingsManager:
         tk.Label(dpi_row, text="DPI:", width=16, anchor="w").pack(side="left")
         tk.Entry(dpi_row, textvariable=self.dpi_var, width=8).pack(side="left", padx=4)
         tk.Label(dpi_row, text="(72-600)", fg="gray").pack(side="left")
+        
+        # Detailed title checkbox
+        title_row = tk.Frame(image_frame)
+        title_row.pack(fill="x", pady=3)
+        tk.Checkbutton(title_row, text="Detailed figure titles (source position + offset)", 
+                       variable=self.detailed_title_var).pack(side="left")
         
         # Export spectra checkbox
         exp_row = tk.Frame(image_frame)

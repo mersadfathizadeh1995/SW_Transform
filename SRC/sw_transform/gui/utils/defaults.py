@@ -30,6 +30,7 @@ PEAK_DEFAULTS = {
 
 # Plot/export defaults
 PLOT_DEFAULTS = {
+    'detailed_title': True,
     'auto_vel_limits': True,
     'auto_freq_limits': True,
     'plot_min_vel': '0',
@@ -75,6 +76,7 @@ DEFAULTS = {
     # Peak
     'power_threshold': PEAK_DEFAULTS['power_threshold'],
     # Plot
+    'detailed_title': PLOT_DEFAULTS['detailed_title'],
     'auto_vel_limits': PLOT_DEFAULTS['auto_vel_limits'],
     'auto_freq_limits': PLOT_DEFAULTS['auto_freq_limits'],
     'plot_min_vel': PLOT_DEFAULTS['plot_min_vel'],

@@ -257,6 +257,12 @@ def run_single(params: Dict[str, Any]) -> Tuple[str, bool, str]:
     # Vibrosis .mat file specific params
     file_type = params.get('file_type', 'seg2')  # 'seg2' or 'mat'
     dx_override = params.get('dx', None)  # Sensor spacing for .mat files
+    positions_override = params.get('positions', None)  # Custom geophone positions array
+    selected_indices = params.get('selected_indices', None)  # Channel indices to use
+    
+    # Source position info for figure titles and CSV naming
+    relative_offset = params.get('relative_offset', None)
+    offset_for_csv = f"{relative_offset:+.0f}" if relative_offset is not None else offset
     
     # Plot limit params - separate auto flags for velocity and frequency
     auto_vel_limits = bool(params.get('auto_vel_limits', True))
@@ -331,6 +337,19 @@ def run_single(params: Dict[str, Any]) -> Tuple[str, bool, str]:
             # Preprocess data
             Tpre, dx, dt2 = _preprocess_with_cache(path, user_rev, st, en, downsample, dfac, numf)
             
+            # Slice data if selected_indices provided (channel selection)
+            if selected_indices is not None:
+                import numpy as np
+                indices = np.asarray(selected_indices)
+                Tpre = Tpre[:, indices]
+            
+            # Use positions array if provided, otherwise use scalar dx
+            if positions_override is not None:
+                import numpy as np
+                dx_or_positions = np.asarray(positions_override)
+            else:
+                dx_or_positions = dx
+            
             # Common transform parameters
             transform_kwargs = dict(
                 fmin=pick_fmin,
@@ -352,7 +371,7 @@ def run_single(params: Dict[str, Any]) -> Tuple[str, bool, str]:
                 weighting = 'none'
             
             # Execute transform: all return (frequencies, velocities, power)
-            f, vels, P = transform_func(Tpre, dt2, dx, **transform_kwargs)
+            f, vels, P = transform_func(Tpre, dt2, dx_or_positions, **transform_kwargs)
             
             # Analyze: all return (pnorm, vmax, wavelength, freq)
             pnorm, vmax, wav, f = analyze_func(f, vels, P, tol=tol)
@@ -367,7 +386,7 @@ def run_single(params: Dict[str, Any]) -> Tuple[str, bool, str]:
             if key == 'fdbf':
                 extra_meta['weighting'] = weighting
                 extra_meta['steering'] = steering if 'steering' in dir() else 'plane'
-            _save_spectrum_npz(outdir, base, key, offset, f, vels, pnorm, vmax, extra_metadata=extra_meta)
+            _save_spectrum_npz(outdir, base, key, offset_for_csv, f, vels, pnorm, vmax, extra_metadata=extra_meta)
         
         # Apply velocity/frequency masks to picks for display
         mask = (vmax >= pick_vmin) & (vmax <= pick_vmax) & (f >= pick_fmin) & (f <= pick_fmax)
@@ -444,8 +463,8 @@ def run_single(params: Dict[str, Any]) -> Tuple[str, bool, str]:
         ))
         plot_func(f, vels, pnorm, vmax_display, **plot_kwargs)
         
-        # Write CSV
-        _write_per_shot_csv(outdir, base, key, offset, list(f), list(vmax), list(wav))
+        # Write CSV (use offset_for_csv for clean filename)
+        _write_per_shot_csv(outdir, base, key, offset_for_csv, list(f), list(vmax), list(wav))
         
         return base, True, fig_name
         
@@ -495,6 +514,12 @@ def run_compare(params: Dict[str, Any]) -> Tuple[str, bool, str]:
     source_type = params.get('source_type', 'hammer')
     cylindrical = bool(params.get('cylindrical', False))
     export_spectra = bool(params.get('export_spectra', True))
+    positions_override = params.get('positions', None)  # Custom geophone positions array
+    selected_indices = params.get('selected_indices', None)  # Channel indices to use
+    
+    # Source position info for CSV naming
+    relative_offset = params.get('relative_offset', None)
+    offset_for_csv = f"{relative_offset:+.0f}" if relative_offset is not None else offset
     
     # Reverse flags per method
     rev_fk = bool(params.get('rev_fk', False))
@@ -514,6 +539,17 @@ def run_compare(params: Dict[str, Any]) -> Tuple[str, bool, str]:
             
             # Preprocess data
             Tpre, dx, dt2 = _preprocess_with_cache(path, rev, st, en, downsample, dfac, numf)
+            
+            # Slice data if selected_indices provided (channel selection)
+            if selected_indices is not None:
+                indices = np.asarray(selected_indices)
+                Tpre = Tpre[:, indices]
+            
+            # Use positions array if provided, otherwise use scalar dx
+            if positions_override is not None:
+                dx_or_positions = np.asarray(positions_override)
+            else:
+                dx_or_positions = dx
             
             # Get transform and analyze functions
             cfg = METHODS[key]
@@ -539,7 +575,7 @@ def run_compare(params: Dict[str, Any]) -> Tuple[str, bool, str]:
                 transform_kwargs['steering'] = steering
             
             # Execute transform
-            f, vels, P = transform_func(Tpre, dt2, dx, **transform_kwargs)
+            f, vels, P = transform_func(Tpre, dt2, dx_or_positions, **transform_kwargs)
             
             # Analyze
             pnorm, vmax, wav, f = analyze_func(f, vels, P, tol=tol_fk)
@@ -550,7 +586,7 @@ def run_compare(params: Dict[str, Any]) -> Tuple[str, bool, str]:
                 if key == 'fdbf':
                     extra_meta['weighting'] = weighting
                     extra_meta['steering'] = steering
-                _save_spectrum_npz(outdir, base, key, offset, f, vels, np.abs(pnorm), vmax, extra_metadata=extra_meta)
+                _save_spectrum_npz(outdir, base, key, offset_for_csv, f, vels, np.abs(pnorm), vmax, extra_metadata=extra_meta)
             
             # Plot on subplot
             V, F = np.meshgrid(vels, f, indexing='ij')
@@ -586,9 +622,9 @@ def run_compare(params: Dict[str, Any]) -> Tuple[str, bool, str]:
                     row += [frq[i], vel[i], wav[i] if i < len(wav) else ""]
                 w.writerow(row)
         
-        # Write per-method CSVs
+        # Write per-method CSVs (use offset_for_csv for clean filename)
         for m, frq, vel, wav in combined:
-            _write_per_shot_csv(outdir, base, m, offset, frq, vel, wav)
+            _write_per_shot_csv(outdir, base, m, offset_for_csv, frq, vel, wav)
         
         return base, True, out_png
         

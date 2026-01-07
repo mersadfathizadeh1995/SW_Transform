@@ -28,6 +28,9 @@ from sw_transform.gui.components import (
     FigureGallery,
     ArrayPreviewPanel,
     AdvancedSettingsManager,
+    ArrayConfigPanel,
+    ReceiverConfigPanel,
+    SourceConfigPanel,
 )
 from sw_transform.gui.utils.defaults import DEFAULTS
 from sw_transform.gui.utils.icons import load_icon, load_app_icon
@@ -69,6 +72,9 @@ class SimpleMASWGUI:
         self.progress_panel: ProgressPanel | None = None
         self.figure_gallery: FigureGallery | None = None
         self.array_preview: ArrayPreviewPanel | None = None
+        self.array_config: ArrayConfigPanel | None = None  # Legacy, kept for compatibility
+        self.receiver_config: ReceiverConfigPanel | None = None
+        self.source_config: SourceConfigPanel | None = None
 
         self._build_menu()
         self._build_ui()
@@ -161,6 +167,17 @@ class SimpleMASWGUI:
         self.limits_panel = ProcessingLimitsPanel(p, include_time=True)
         self.limits_panel.pack(fill="x", padx=6, pady=4)
 
+        # Receiver configuration component (with callback to refresh preview)
+        self.receiver_config = ReceiverConfigPanel(p, on_config_change=self._on_receiver_config_change)
+        self.receiver_config.pack(fill="x", padx=6, pady=4)
+        
+        # Keep array_config as alias to receiver_config for backward compatibility
+        self.array_config = self.receiver_config
+        
+        # Source configuration component
+        self.source_config = SourceConfigPanel(p, on_config_change=self._on_source_config_change)
+        self.source_config.pack(fill="x", padx=6, pady=4)
+
         # Figure title
         topic_box = tk.LabelFrame(p, text="Figure Title")
         topic_box.pack(fill="x", padx=6, pady=4)
@@ -245,6 +262,9 @@ class SimpleMASWGUI:
         # Auto-enable vibrosis mode if .mat files loaded
         if self.file_tree.has_mat_files:
             self.advanced.vibrosis_mode.set(True)
+        # Update source config with file info
+        if self.source_config:
+            self.source_config.update_files(self.file_tree.file_data)
 
     def select_out(self):
         """Select output folder."""
@@ -259,6 +279,8 @@ class SimpleMASWGUI:
             self.file_tree.clear()
             self.advanced.vibrosis_mode.set(False)
             self._log("Cleared all files.")
+        if self.source_config:
+            self.source_config.clear()
 
     def _auto_assign_from_filenames(self):
         """Auto-assign offsets from filenames."""
@@ -291,6 +313,39 @@ class SimpleMASWGUI:
 
     # ==================== Preview ====================
 
+    def _on_receiver_config_change(self):
+        """Callback when receiver configuration changes - refresh preview and sync source config."""
+        # Update source config with new receiver positions
+        if self.source_config and self.receiver_config:
+            try:
+                cfg = self.receiver_config.get_config()
+                positions = cfg.get_positions().tolist()
+                self.source_config.update_receiver_positions(positions)
+                # Force custom source mode if receiver uses non-standard selection
+                if self.receiver_config.is_custom_mode():
+                    self.source_config.force_custom_mode()
+            except Exception:
+                pass
+        
+        # Refresh preview if file loaded
+        if self.file_tree and self.file_tree.files:
+            try:
+                self.preview_array()
+            except Exception:
+                pass
+    
+    def _on_source_config_change(self):
+        """Callback when source configuration changes - refresh preview if file loaded."""
+        if self.file_tree and self.file_tree.files:
+            try:
+                self.preview_array()
+            except Exception:
+                pass
+    
+    def _on_array_config_change(self):
+        """Legacy callback - calls _on_receiver_config_change for backward compatibility."""
+        self._on_receiver_config_change()
+
     def preview_array(self):
         """Build embedded preview (array schematic + waterfall)."""
         path = self._resolve_selected_path()
@@ -305,6 +360,11 @@ class SimpleMASWGUI:
             import numpy as np
 
             time, T, Shotpoint, Spacing, dt, _ = load_seg2_ar(path)
+            
+            # Update array config panel with file info
+            n_channels_file = T.shape[1]
+            if self.array_config:
+                self.array_config.set_file_info(n_channels_file, float(Spacing))
 
             # Get preprocessing params from limits panel
             limits = self.limits_panel.get_values()
@@ -314,10 +374,12 @@ class SimpleMASWGUI:
             df = int(self.advanced.down_factor_var.get())
             nf = int(self.advanced.numf_var.get())
 
+            # Preprocess with all channels from file
             Tpre, time_pre, dt2 = preprocess_data(
                 T, time, dt, reverse_shot=False,
                 start_time=st, end_time=en,
-                do_downsample=ds, down_factor=df, numf=nf
+                do_downsample=ds, down_factor=df, numf=nf,
+                numchannels=n_channels_file
             )
 
             # Optional display time trim
@@ -332,41 +394,78 @@ class SimpleMASWGUI:
                 except Exception:
                     pass
 
-            positions = np.arange(Tpre.shape[1], dtype=float) * float(Spacing)
+            # All geophone positions from file
+            all_positions = np.arange(n_channels_file, dtype=float) * float(Spacing)
+            
+            # Get selected indices from array config
+            selected_indices = None
+            if self.array_config:
+                try:
+                    arr_cfg = self.array_config.get_config()
+                    selected_indices = arr_cfg.get_selected_indices()
+                except Exception:
+                    pass
             fig = Figure(figsize=(7.5, 6.0), dpi=100)
             gs = fig.add_gridspec(2, 1, height_ratios=[1, 3], hspace=0.42)
             ax1 = fig.add_subplot(gs[0])
             ax2 = fig.add_subplot(gs[1])
 
-            # Schematic
-            ax1.plot(positions, np.zeros_like(positions), "^", color="green", label="Sensor")
+            # Schematic - show all geophones, highlight selected
+            if selected_indices is not None and len(selected_indices) > 0:
+                selected_set = set(selected_indices)
+                inactive_idx = [i for i in range(n_channels_file) if i not in selected_set]
+                active_idx = list(selected_indices)
+                
+                if inactive_idx:
+                    inactive_pos = all_positions[inactive_idx]
+                    ax1.plot(inactive_pos, np.zeros_like(inactive_pos), "^", 
+                            color="lightgray", markersize=6, label="Inactive")
+                if active_idx:
+                    active_pos = all_positions[active_idx]
+                    ax1.plot(active_pos, np.zeros_like(active_pos), "^", 
+                            color="green", markersize=8, label="Selected")
+            else:
+                ax1.plot(all_positions, np.zeros_like(all_positions), "^", 
+                        color="green", markersize=8, label="Sensor")
 
-            # Source position from file tree
+            # Source position from source_config or file tree
+            base = os.path.splitext(os.path.basename(path))[0]
             try:
-                base = os.path.splitext(os.path.basename(path))[0]
-                off_txt = (self.file_tree.offsets.get(base, "+0") or "+0").strip().replace("m", "")
-                if off_txt.startswith("+"):
-                    src_x = float(off_txt[1:])
+                if self.source_config:
+                    positions = self.source_config.get_source_positions()
+                    src_x = positions.get(base, 0.0)
                 else:
-                    src_x = float(off_txt)
+                    off_txt = (self.file_tree.offsets.get(base, "+0") or "+0").strip().replace("m", "")
+                    if off_txt.startswith("+"):
+                        src_x = float(off_txt[1:])
+                    else:
+                        src_x = float(off_txt)
             except Exception:
                 src_x = float(Shotpoint)
 
-            ax1.plot([src_x], [0.0], "D", color="tab:red", label="Source")
+            ax1.plot([src_x], [0.0], "D", color="tab:red", markersize=10, label="Source")
             ax1.set_yticks([])
             ax1.set_xlabel("Distance (m)")
             ax1.legend(loc="upper left", bbox_to_anchor=(1.02, 1), borderaxespad=0)
             ax1.set_title("Array schematic")
 
-            # Waterfall
+            # Waterfall - show all traces, highlight selected
             traces = Tpre.copy().T
             denom = np.max(np.abs(traces), axis=1, keepdims=True)
             denom[denom == 0] = 1.0
             traces = traces / denom
-            spacing = float(np.mean(np.diff(positions))) if len(positions) > 1 else 1.0
+            spacing = float(np.mean(np.diff(all_positions))) if len(all_positions) > 1 else 1.0
             scale = 0.5 * spacing
-            for tr, x0 in zip(traces, positions):
-                ax2.plot(tr * scale + x0, time_pre, color="b", linewidth=0.5)
+            
+            for i, (tr, x0) in enumerate(zip(traces, all_positions)):
+                if selected_indices is not None and len(selected_indices) > 0:
+                    color = "blue" if i in set(selected_indices) else "lightgray"
+                    lw = 0.6 if i in set(selected_indices) else 0.3
+                else:
+                    color = "blue"
+                    lw = 0.5
+                ax2.plot(tr * scale + x0, time_pre, color=color, linewidth=lw)
+            
             ax2.invert_yaxis()
             ax2.set_xlabel("Distance (m)")
             ax2.set_ylabel("Time (s)")
@@ -511,8 +610,47 @@ class SimpleMASWGUI:
                 paths = [p for p in self.file_tree.files
                          if os.path.splitext(os.path.basename(p))[0] in selected_bases]
 
+            # Get array config positions and selected indices
+            positions = None
+            selected_indices = None
+            if self.array_config:
+                try:
+                    arr_cfg = self.array_config.get_config()
+                    if arr_cfg.spacing_mode == 'custom' or arr_cfg.channel_mode != 'all':
+                        positions = arr_cfg.get_positions().tolist()
+                        selected_indices = arr_cfg.get_selected_indices().tolist()
+                except Exception:
+                    pass
+
+            # Get source positions from source_config
+            source_positions = {}
+            if self.source_config:
+                source_positions = self.source_config.get_source_positions()
+            
+            # Get receiver config info
+            n_geophones = 24
+            geophone_spacing = 2.0
+            array_start = 0.0
+            array_end = 46.0
+            if self.receiver_config:
+                try:
+                    rcfg = self.receiver_config.get_config()
+                    n_geophones = rcfg.get_n_selected()
+                    geophone_spacing = rcfg.dx
+                    pos_arr = rcfg.get_positions()
+                    if len(pos_arr) > 0:
+                        array_start = float(pos_arr[0])
+                        array_end = float(pos_arr[-1])
+                except Exception:
+                    pass
+
             # Build params list
             params_list = []
+            self._log(f"=== Run Configuration ===")
+            self._log(f"Method: {key.upper()}")
+            self._log(f"Array: {n_geophones} geophones @ {geophone_spacing}m ({array_start:.1f}m -> {array_end:.1f}m)")
+            self._log(f"")
+            
             for path in paths:
                 base = os.path.splitext(os.path.basename(path))[0]
                 offset = self.file_tree.offsets.get(base, "+0")
@@ -521,9 +659,33 @@ class SimpleMASWGUI:
                 source_type = "vibrosis" if self.advanced.vibrosis_mode.get() else "hammer"
                 cylindrical = self.advanced.cylindrical_var.get()
                 file_type = self.file_tree.file_types.get(base, 'seg2')
+                
+                # Get source position for this file and compute relative offset
+                src_pos = source_positions.get(base, 0.0)
+                relative_offset = src_pos - array_start
+                
+                # Determine shot type
+                if src_pos < array_start:
+                    shot_type = "exterior_left"
+                elif src_pos > array_end:
+                    shot_type = "exterior_right"
+                else:
+                    shot_type = "interior"
+                
+                # Log file config with detailed info
+                self._log(f"File: {base}")
+                self._log(f"  Source: {src_pos:.1f}m (offset: {relative_offset:+.1f}m from array start)")
+                self._log(f"  Shot type: {shot_type}, Reverse: {rev}")
 
+                # Build offset label for figure title
+                detailed_title = self.advanced.detailed_title_var.get()
+                if detailed_title:
+                    offset_label = f"Source: {src_pos:.1f}m (offset: {relative_offset:+.1f}m)"
+                else:
+                    offset_label = f"{relative_offset:+.0f}"
+                
                 params = dict(
-                    path=path, base=base, key=key, offset=offset, outdir=self.output_folder,
+                    path=path, base=base, key=key, offset=offset_label, outdir=self.output_folder,
                     pick_vmin=pick_vmin, pick_vmax=pick_vmax, pick_fmin=pick_fmin, pick_fmax=pick_fmax,
                     st=st, en=en, downsample=downsample, dfac=dfac, numf=numf,
                     grid_n=grid_n, tol=tol, vspace=vspace, dpi=fig_dpi, rev=rev,
@@ -533,6 +695,11 @@ class SimpleMASWGUI:
                     export_spectra=self.advanced.export_spectra_var.get(),
                     file_type=file_type,
                     dx=dx if file_type == 'mat' else None,
+                    positions=positions,
+                    selected_indices=selected_indices,
+                    source_position=src_pos,
+                    relative_offset=relative_offset,
+                    detailed_title=detailed_title,
                     auto_vel_limits=self.advanced.auto_vel_limits_var.get(),
                     auto_freq_limits=self.advanced.auto_freq_limits_var.get(),
                     plot_min_vel=self.advanced.plot_min_vel_var.get(),
@@ -654,6 +821,16 @@ class SimpleMASWGUI:
             paths = [p for p in self.file_tree.files
                      if os.path.splitext(os.path.basename(p))[0] in selected_bases]
 
+        # Get array config positions if custom spacing is used
+        positions = None
+        if self.array_config:
+            try:
+                arr_cfg = self.array_config.get_config()
+                if arr_cfg.spacing_mode == 'custom' or arr_cfg.channel_mode != 'all':
+                    positions = arr_cfg.get_positions().tolist()
+            except Exception:
+                pass
+
         # Build params list
         params_list = []
         for path in paths:
@@ -672,7 +849,8 @@ class SimpleMASWGUI:
                 topic=(self.figure_topic_var.get() or ""),
                 source_type=source_type,
                 cylindrical=cylindrical,
-                export_spectra=self.advanced.export_spectra_var.get()
+                export_spectra=self.advanced.export_spectra_var.get(),
+                positions=positions
             )
             params_list.append(params)
 

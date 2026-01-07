@@ -250,7 +250,7 @@ def plot_phase_shift_dispersion(freq_sub, velocities, pnorm, vmax_picks, vmin_pl
     plt.colorbar(cf, label="Normalized Power")
     ax.plot(freq_sub, vmax_picks, 'o', mfc='none', mec='white', ms=4, label="Dispersion Picks")
     
-    ttl = title if offset_label == "" else f"{title}\nShot offset: {offset_label}"
+    ttl = title if offset_label == "" else f"{title}\n{offset_label}"
     ax.set_title(ttl)
     ax.set_xlabel("Frequency (Hz)")
     ax.set_ylabel("Phase Velocity (m/s)")

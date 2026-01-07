@@ -25,8 +25,8 @@ def fdbf_transform(data, dt, dx, fmin=5.0, fmax=100.0, nvel=400, vmin=50.0, vmax
         Time-domain data matrix (nsamples, nchannels)
     dt : float
         Time sampling interval (seconds)
-    dx : float
-        Geophone spacing (meters)
+    dx : float or array-like
+        Geophone spacing (meters) or array of positions
     fmin, fmax : float
         Frequency range (Hz)
     nvel : int
@@ -57,7 +57,10 @@ def fdbf_transform(data, dt, dx, fmin=5.0, fmax=100.0, nvel=400, vmin=50.0, vmax
     nsamples, nchannels = data.shape
     
     # Receiver offsets (relative positions)
-    offsets = np.arange(nchannels) * dx
+    if np.isscalar(dx):
+        offsets = np.arange(nchannels) * dx
+    else:
+        offsets = np.asarray(dx)
     
     # Frequency vector
     df = 1.0 / (nsamples * dt)
@@ -269,7 +272,7 @@ def plot_fdbf_dispersion(freq_sub, velocities, pnorm, vmax_picks, vmin_plot=0, v
     plt.colorbar(cf, label="Normalized Power")
     ax.plot(freq_sub, vmax_picks, 'o', mfc='none', mec='white', ms=4, label="Dispersion Picks")
     
-    ttl = title if offset_label == "" else f"{title}\nShot offset: {offset_label}"
+    ttl = title if offset_label == "" else f"{title}\n{offset_label}"
     ax.set_title(ttl)
     ax.set_xlabel("Frequency (Hz)")
     ax.set_ylabel("Phase Velocity (m/s)")
@@ -357,7 +360,7 @@ def plot_freq_velocity_spectrum(freq_sub, velocities, pnorm, vmax, max_velocity=
                          offset_label=offset_label, fig_name=fig_name)
 
 
-def fdbf_transform_from_R(R: np.ndarray, frequencies: np.ndarray, dx: float,
+def fdbf_transform_from_R(R: np.ndarray, frequencies: np.ndarray, dx,
                           fmin: float = 5.0, fmax: float = 100.0,
                           nvel: int = 400, vmin: float = 50.0, vmax: float = 5000.0,
                           vspace: str = "linear", steering: str = "cylindrical") -> tuple:
@@ -376,8 +379,8 @@ def fdbf_transform_from_R(R: np.ndarray, frequencies: np.ndarray, dx: float,
         R[j, i, f] = TF[f, i] / TF[f, j]
     frequencies : ndarray
         Frequency vector (Hz) corresponding to R
-    dx : float
-        Geophone spacing (meters)
+    dx : float or array-like
+        Geophone spacing (meters) or array of positions
     fmin, fmax : float
         Frequency range to process (Hz)
     nvel : int
@@ -413,7 +416,10 @@ def fdbf_transform_from_R(R: np.ndarray, frequencies: np.ndarray, dx: float,
         velocities = np.linspace(vmin, vmax, nvel)
     
     # Receiver offsets (relative positions)
-    offsets = np.arange(nchannels, dtype=float) * dx
+    if np.isscalar(dx):
+        offsets = np.arange(nchannels, dtype=float) * dx
+    else:
+        offsets = np.asarray(dx, dtype=float)
     
     # Compute power spectrum using beamforming
     # For each velocity v and frequency f:
@@ -465,7 +471,7 @@ def fdbf_transform_from_R(R: np.ndarray, frequencies: np.ndarray, dx: float,
     return freq_out, velocities, power
 
 
-def fdbf_transform_from_R_vectorized(R: np.ndarray, frequencies: np.ndarray, dx: float,
+def fdbf_transform_from_R_vectorized(R: np.ndarray, frequencies: np.ndarray, dx,
                                      fmin: float = 5.0, fmax: float = 100.0,
                                      nvel: int = 400, vmin: float = 50.0, vmax: float = 5000.0,
                                      vspace: str = "linear", steering: str = "cylindrical") -> tuple:
@@ -492,7 +498,10 @@ def fdbf_transform_from_R_vectorized(R: np.ndarray, frequencies: np.ndarray, dx:
         velocities = np.linspace(vmin, vmax, nvel)
     
     # Receiver offsets
-    offsets = np.arange(nchannels, dtype=float) * dx
+    if np.isscalar(dx):
+        offsets = np.arange(nchannels, dtype=float) * dx
+    else:
+        offsets = np.asarray(dx, dtype=float)
     
     # Create meshgrids for vectorized computation
     V = velocities[:, np.newaxis, np.newaxis]  # (nvel, 1, 1)

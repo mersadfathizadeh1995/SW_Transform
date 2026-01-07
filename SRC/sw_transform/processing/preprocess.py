@@ -17,9 +17,13 @@ def preprocess_data(Timematrix, time, deltat,
                     do_downsample=False,
                     down_factor=16,
                     numf=4000,
-                    numchannels=24,
+                    numchannels=None,
                     shot_index=1,
                     num_reverse_shots=4) -> Tuple:
+    # Use all channels if not specified
+    if numchannels is None:
+        numchannels = Timematrix.shape[1]
+    
     if reverse_shot and (shot_index <= num_reverse_shots):
         Timematrix = np.fliplr(Timematrix[:, :numchannels])
     else:
