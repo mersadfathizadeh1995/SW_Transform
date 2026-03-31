@@ -23,7 +23,8 @@ from ..processing.batch_processor import (
     process_vibrosis_subarray,
     process_vibrosis_batch,
 )
-from ..output.organizer import organize_results
+from ..output.organizer import organize_results, export_single_result, write_summary_from_metadata
+from .standard_masw import _load_npz_metadata
 
 
 class VibrosisMASWWorkflow(BaseWorkflow):
@@ -179,8 +180,33 @@ class VibrosisMASWWorkflow(BaseWorkflow):
                 "n_results": 0
             }
         
-        # Process each .mat file
-        all_results: List[DispersionResult] = []
+        # Prepare export settings
+        output_config = self.config.get("output", {})
+        export_formats = output_config.get("export_formats", ["csv"])
+        organize_by = output_config.get("organize_by", "midpoint")
+        include_images = (
+            output_config.get("include_images", False) or
+            any(fmt in export_formats for fmt in ("image", "png", "jpg", "jpeg"))
+        )
+        image_params = {
+            "max_frequency": output_config.get("max_frequency", None),
+            "cmap": output_config.get("cmap", "jet"),
+            "dpi": output_config.get("image_dpi", 150),
+            "auto_velocity_limit": output_config.get("auto_velocity_limit", True),
+            "auto_frequency_limit": output_config.get("auto_frequency_limit", True)
+        }
+        if "max_velocity" in output_config and not output_config.get("auto_velocity_limit", True):
+            image_params["max_velocity"] = output_config["max_velocity"]
+        
+        # When images are deferred, NPZ must be saved during processing
+        # so the image renderer can read data back without keeping it in RAM
+        export_fmts_for_processing = list(export_formats)
+        if include_images and "npz" not in export_fmts_for_processing:
+            export_fmts_for_processing.append("npz")
+        
+        # Lightweight metadata list (replaces all_results accumulation)
+        all_results_meta: List[Dict[str, Any]] = []
+        all_exported_files: List[str] = []
         total_files = len(mat_files)
         
         # Build mapping from file path to source_position from shots config
@@ -188,7 +214,6 @@ class VibrosisMASWWorkflow(BaseWorkflow):
         source_positions = {}
         for shot in shots_config:
             shot_file = shot.get("file", "")
-            # Normalize path for comparison
             shot_file_norm = str(Path(shot_file).resolve()) if shot_file else ""
             source_positions[shot_file_norm] = shot.get("source_position", 0.0)
         
@@ -202,22 +227,17 @@ class VibrosisMASWWorkflow(BaseWorkflow):
             )
             
             try:
-                # Load vibrosis data
                 vibrosis_data = load_vibrosis_mat(str(mat_path))
                 
-                # Get source_position from shots config, default to 0.0 if not found
                 mat_path_norm = str(mat_path.resolve())
                 source_pos = source_positions.get(mat_path_norm, 0.0)
                 
-                # Create shot info for this file
-                # For vibrosis we typically have source outside array
                 shot_info = ShotInfo(
                     file=str(mat_path),
                     source_position=source_pos,
-                    shot_type=ShotType.EXTERIOR_LEFT  # Default for vibrosis
+                    shot_type=ShotType.EXTERIOR_LEFT
                 )
                 
-                # Extract all sub-arrays
                 extracted = extract_all_vibrosis_subarrays(
                     vibrosis_data, dx, subarrays, shot_info
                 )
@@ -227,64 +247,94 @@ class VibrosisMASWWorkflow(BaseWorkflow):
                     warnings.warn(f"No valid sub-arrays extracted from {mat_path.name}")
                     continue
                 
-                # Process each extracted sub-array
                 results = process_vibrosis_batch(
                     extracted,
                     processing_params=proc_params
                 )
                 
-                all_results.extend(results)
+                # Write CSV/NPZ immediately (no images yet), then release
+                for result in results:
+                    meta = export_single_result(
+                        result, output_dir,
+                        organize_by=organize_by,
+                        export_formats=export_fmts_for_processing,
+                        include_images=False,
+                        image_params=image_params
+                    )
+                    all_results_meta.append(meta)
+                    all_exported_files.extend(meta['files'])
+                del results  # Free memory
                 
             except Exception as e:
                 import warnings
                 warnings.warn(f"Failed to process {mat_path.name}: {e}")
                 continue
         
-        self._report_progress(total_files, total_files, "Organizing results...")
+        self._report_progress(total_files, total_files, "Writing summary...")
         
-        if not all_results:
+        if not all_results_meta:
             return {
                 "status": "error",
                 "error": "No dispersion curves were extracted",
                 "n_results": 0
             }
         
-        # Organize and export results
-        output_config = self.config.get("output", {})
-        export_formats = output_config.get("export_formats", ["csv"])
-        organize_by = output_config.get("organize_by", "midpoint")
-        include_images = (
-            output_config.get("include_images", False) or 
-            any(fmt in export_formats for fmt in ("image", "png", "jpg", "jpeg"))
-        )
+        # Write summary files from lightweight metadata
+        summary_result = write_summary_from_metadata(all_results_meta, output_dir)
+        all_exported_files.extend(summary_result['files'])
         
-        # Image parameters
-        image_params = {
-            "max_frequency": output_config.get("max_frequency", None),
-            "cmap": output_config.get("cmap", "jet"),
-            "dpi": output_config.get("image_dpi", 150),
-            "auto_velocity_limit": output_config.get("auto_velocity_limit", True),
-            "auto_frequency_limit": output_config.get("auto_frequency_limit", True)
+        # Deferred image export: render PNGs from saved NPZ files (after processing)
+        if include_images:
+            npz_files = [m['npz_path'] for m in all_results_meta if m.get('npz_path')]
+            if npz_files:
+                import numpy as np
+                self._report_progress(total_files, total_files, "Rendering images...")
+                from ..output.export import export_dispersion_image
+                from ..processing.batch_processor import DispersionResult as DR
+                for npz_path in npz_files:
+                    try:
+                        with np.load(npz_path, allow_pickle=True) as data:
+                            result = DR(
+                                frequencies=data['frequencies'],
+                                velocities=data['velocities'],
+                                power=data['power'],
+                                picked_velocities=data['picked_velocities'],
+                                wavelengths=data['wavelengths'],
+                                midpoint=float(data['midpoint']),
+                                subarray_config=str(data['subarray_config']),
+                                shot_file=str(data.get('shot_file', '')),
+                                source_offset=float(data['source_offset']),
+                                direction=str(data['direction']),
+                                method=str(data['method']),
+                                metadata=_load_npz_metadata(data)
+                            )
+                        png_path = npz_path.replace('.npz', '.png')
+                        img_p = image_params.copy()
+                        img_p.setdefault('auto_velocity_limit', True)
+                        img_p.setdefault('auto_frequency_limit', True)
+                        export_dispersion_image(result, png_path, **img_p)
+                        all_exported_files.append(png_path)
+                        del result
+                    except Exception as e:
+                        import warnings
+                        warnings.warn(f"Failed to render image from {npz_path}: {e}")
+        
+        midpoints = sorted(set(m['midpoint'] for m in all_results_meta))
+        
+        summary = {
+            "status": "success",
+            "n_results": len(all_results_meta),
+            "n_midpoints": len(midpoints),
+            "midpoints": midpoints,
+            "files": all_exported_files,
+            "organize_by": organize_by,
+            "summary": summary_result.get('summary', {}),
+            "workflow": "vibrosis_masw",
+            "survey_name": self.survey_name,
+            "method": "fdbf",
+            "source_type": "vibrosis",
+            "n_files_processed": total_files,
         }
-        if "max_velocity" in output_config and not output_config.get("auto_velocity_limit", True):
-            image_params["max_velocity"] = output_config["max_velocity"]
-        
-        summary = organize_results(
-            all_results,
-            output_dir,
-            organize_by=organize_by,
-            export_formats=export_formats,
-            include_summary=True,
-            include_images=include_images,
-            image_params=image_params
-        )
-        
-        # Add workflow info to summary
-        summary["workflow"] = "vibrosis_masw"
-        summary["survey_name"] = self.survey_name
-        summary["method"] = "fdbf"
-        summary["source_type"] = "vibrosis"
-        summary["n_files_processed"] = total_files
         
         self._report_progress(total_files, total_files, "Complete!")
         

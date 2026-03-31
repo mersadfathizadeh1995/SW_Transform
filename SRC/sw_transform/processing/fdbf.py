@@ -93,33 +93,41 @@ def fdbf_transform(data, dt, dx, fmin=5.0, fmax=100.0, nvel=400, vmin=50.0, vmax
         w = np.sqrt(np.maximum(offsets, 1.0))[:, np.newaxis]
         transform = transform * w
     
-    # Vectorized FDBF computation
-    # Create meshgrid for vectorized computation
-    V = velocities[:, np.newaxis, np.newaxis]  # (nvel, 1, 1)
-    X = offsets[np.newaxis, :, np.newaxis]      # (1, nchannels, 1)
-    F = frequencies[np.newaxis, np.newaxis, :]  # (1, 1, nfreq)
+    # Vectorized FDBF computation with chunked frequency processing
+    # Chunks avoid allocating the full (nvel, nchan, nfreq) steering matrix
     
-    # Phase: k*x = 2πf/v * x
-    phase = 2.0 * np.pi * F * X / V  # (nvel, nchannels, nfreq)
+    MAX_CHUNK_BYTES = 512 * 1024 * 1024  # 512 MB target per chunk
+    bytes_per_element = 16  # complex128
+    elements_per_freq = nvel * nchannels
+    chunk_size = max(1, MAX_CHUNK_BYTES // (elements_per_freq * bytes_per_element))
     
-    # Steering function
-    if steering == 'cylindrical':
-        # Cylindrical wave using Hankel function
-        # Reference: UofA_MASWMultiProcessV2Cyl.m line 329-330
-        # expterm = exp( 1i .* angle(H0) ) - uses +1i, not -1i
+    power = np.empty((nvel, nfreq), dtype=np.float64)
+    
+    for f_start in range(0, nfreq, chunk_size):
+        f_end = min(f_start + chunk_size, nfreq)
+        
+        V = velocities[:, np.newaxis, np.newaxis]       # (nvel, 1, 1)
+        X = offsets[np.newaxis, :, np.newaxis]           # (1, nchannels, 1)
+        F_chunk = frequencies[np.newaxis, np.newaxis, f_start:f_end]  # (1, 1, chunk)
+        
         with np.errstate(divide='ignore', invalid='ignore'):
-            h0 = special.j0(phase) + 1j * special.y0(phase)
-            h0 = np.where(phase > 1e-10, h0, 1.0 + 0j)
-        steer = np.exp(1j * np.angle(h0))  # +1j per MATLAB reference
-    else:  # plane
-        steer = np.exp(1j * phase)  # +1j for correct direction
-    
-    # Broadcast transform: (nchannels, nfreq) -> (nvel, nchannels, nfreq)
-    U_broad = transform[np.newaxis, :, :]
-    
-    # Beamforming: sum of steered signals
-    inner = steer * U_broad
-    power = np.abs(np.sum(inner, axis=1)) ** 2  # Squared for power
+            phase = 2.0 * np.pi * F_chunk * X / V       # (nvel, nchannels, chunk)
+            phase = np.where(np.isfinite(phase), phase, 0.0)
+        
+        # Steering function
+        if steering == 'cylindrical':
+            with np.errstate(divide='ignore', invalid='ignore'):
+                h0 = special.j0(phase) + 1j * special.y0(phase)
+                h0 = np.where(phase > 1e-10, h0, 1.0 + 0j)
+            steer = np.exp(1j * np.angle(h0))
+        else:  # plane
+            steer = np.exp(1j * phase)
+        
+        U_chunk = transform[np.newaxis, :, f_start:f_end]  # (1, nchannels, chunk)
+        inner = steer * U_chunk
+        power[:, f_start:f_end] = np.abs(np.sum(inner, axis=1)) ** 2
+        
+        del phase, steer, inner, U_chunk
     
     # Normalize per frequency
     max_per_freq = np.max(power, axis=0, keepdims=True)
@@ -168,9 +176,13 @@ def analyze_fdbf_spectrum(freq_sub, velocities, power, normalization="frequency-
     
     pnorm = np.abs(power.copy())
     
+    # Handle all-NaN case
+    if np.all(np.isnan(pnorm)):
+        pnorm = np.zeros_like(pnorm)
+    
     # Store raw power for threshold check
-    global_max_power = np.nanmax(pnorm) if np.nanmax(pnorm) > 0 else 1.0
-    max_power_per_freq = np.nanmax(pnorm, axis=0)
+    global_max_power = np.nanmax(pnorm) if pnorm.size > 0 and np.any(np.isfinite(pnorm)) else 1.0
+    max_power_per_freq = np.nanmax(pnorm, axis=0) if np.any(np.isfinite(pnorm)) else np.ones(pnorm.shape[1])
     
     # Normalize
     if normalization == "none":
@@ -503,44 +515,43 @@ def fdbf_transform_from_R_vectorized(R: np.ndarray, frequencies: np.ndarray, dx,
     else:
         offsets = np.asarray(dx, dtype=float)
     
-    # Create meshgrids for vectorized computation
-    V = velocities[:, np.newaxis, np.newaxis]  # (nvel, 1, 1)
-    F = freq_out[np.newaxis, np.newaxis, :]    # (1, 1, nfreq)
-    X = offsets[np.newaxis, :, np.newaxis]     # (1, nchannels, 1)
-    
-    # Phase: k * x = 2πf/v * x
-    # Shape: (nvel, nchannels, nfreq)
-    with np.errstate(divide='ignore', invalid='ignore'):
-        phase = 2.0 * np.pi * F * X / V
-        phase = np.where(V > 0, phase, 0)
-    
-    # Steering vector
-    # Reference: UofA_MASWMultiProcessV2Cyl.m line 329-330
-    if steering == 'cylindrical':
-        with np.errstate(divide='ignore', invalid='ignore'):
-            h0 = special.j0(phase) + 1j * special.y0(phase)
-            h0 = np.where(phase > 1e-10, h0, 1.0 + 0j)
-        e = np.exp(1j * np.angle(h0))  # +1j per MATLAB reference (nvel, nchannels, nfreq)
-    else:
-        e = np.exp(1j * phase)  # (nvel, nchannels, nfreq)
-    
-    # Beamformer: P(v,f) = |e^H R e| = |sum_j sum_i conj(e_j) R_ji e_i|
-    # R_sub: (nchannels, nchannels, nfreq)
-    # e: (nvel, nchannels, nfreq)
-    
+    # Chunked steering vector to avoid massive (nvel, nchannels, nfreq) allocation
     power = np.zeros((nvel, nfreq), dtype=float)
     
-    for ifr in range(nfreq):
-        R_f = R_sub[:, :, ifr]  # (nchannels, nchannels)
-        e_f = e[:, :, ifr]      # (nvel, nchannels)
-        
-        # For each velocity: e_v^H * R_f * e_v
-        # e_f[v, :] is steering vector for velocity v
-        # Vectorized over velocities
-        Re = np.dot(R_f, e_f.T)  # (nchannels, nvel)
-        beam = np.sum(np.conj(e_f.T) * Re, axis=0)  # (nvel,)
-        power[:, ifr] = np.abs(beam)
+    MAX_CHUNK_BYTES = 512 * 1024 * 1024
+    bytes_per_element = 16  # complex128
+    elements_per_freq = nvel * nchannels
+    chunk_size = max(1, MAX_CHUNK_BYTES // (elements_per_freq * bytes_per_element))
     
+    for f_start in range(0, nfreq, chunk_size):
+        f_end = min(f_start + chunk_size, nfreq)
+        
+        V = velocities[:, np.newaxis, np.newaxis]       # (nvel, 1, 1)
+        X = offsets[np.newaxis, :, np.newaxis]           # (1, nchannels, 1)
+        F_chunk = freq_out[np.newaxis, np.newaxis, f_start:f_end]  # (1, 1, chunk)
+        
+        with np.errstate(divide='ignore', invalid='ignore'):
+            phase = 2.0 * np.pi * F_chunk * X / V       # (nvel, nchannels, chunk)
+            phase = np.where(V > 0, phase, 0)
+        
+        if steering == 'cylindrical':
+            with np.errstate(divide='ignore', invalid='ignore'):
+                h0 = special.j0(phase) + 1j * special.y0(phase)
+                h0 = np.where(phase > 1e-10, h0, 1.0 + 0j)
+            e = np.exp(1j * np.angle(h0))
+        else:
+            e = np.exp(1j * phase)
+        
+        # Beamformer per frequency within chunk
+        for ifr_local in range(f_end - f_start):
+            ifr = f_start + ifr_local
+            R_f = R_sub[:, :, ifr]    # (nchannels, nchannels)
+            e_f = e[:, :, ifr_local]  # (nvel, nchannels)
+            Re = np.dot(R_f, e_f.T)   # (nchannels, nvel)
+            beam = np.sum(np.conj(e_f.T) * Re, axis=0)
+            power[:, ifr] = np.abs(beam)
+        
+        del phase, e
     # Normalize per frequency
     max_per_freq = np.max(power, axis=0, keepdims=True)
     max_per_freq[max_per_freq == 0] = 1.0

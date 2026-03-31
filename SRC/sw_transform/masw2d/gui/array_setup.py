@@ -154,3 +154,17 @@ class ArraySetupPanel(ttk.LabelFrame):
             return float(self.dx_var.get())
         except ValueError:
             return 2.0
+
+    def set_file_info(self, n_channels: int, dx: float):
+        """Auto-populate array setup from file header info.
+        
+        Args:
+            n_channels: Number of channels detected in the file
+            dx: Geophone spacing detected in the file (meters)
+        """
+        if n_channels > 0:
+            self.n_channels_var.set(str(n_channels))
+        if dx > 0:
+            self.dx_var.set(str(dx))
+        self._update_info()
+        self._trigger_update()

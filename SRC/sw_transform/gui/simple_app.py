@@ -265,6 +265,22 @@ class SimpleMASWGUI:
         # Update source config with file info
         if self.source_config:
             self.source_config.update_files(self.file_tree.file_data)
+        # Auto-detect receiver geometry from first file
+        if self.file_tree.files:
+            try:
+                from sw_transform.processing.seg2 import load_seg2_ar
+                import numpy as np
+                first_file = self.file_tree.files[0]
+                if not first_file.lower().endswith('.mat'):
+                    _, T, _, Spacing, _, _ = load_seg2_ar(first_file)
+                    n_channels = T.shape[1]
+                    if self.array_config:
+                        self.array_config.set_file_info(n_channels, float(Spacing))
+                    if self.source_config:
+                        positions = (np.arange(n_channels) * float(Spacing)).tolist()
+                        self.source_config.update_receiver_positions(positions)
+            except Exception:
+                pass
 
     def select_out(self):
         """Select output folder."""

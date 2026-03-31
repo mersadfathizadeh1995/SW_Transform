@@ -168,12 +168,36 @@ class MASW2DTab:
         # Update preview
         self._update_preview()
     def _on_files_changed(self):
-        """Handle files added/removed."""
+        """Handle files added/removed — auto-detect array config from first file."""
         # Check if .mat files were added - auto-enable vibrosis mode
         if self.file_panel and self.file_panel.has_mat_files:
             self.vibrosis_var.set(True)
             self.cylindrical_var.set(True)
             self.log("Vibrosis .mat files detected - FDBF mode enabled")
+        
+        # Auto-detect receiver geometry from first file
+        if self.file_panel and self.array_panel:
+            files = self.file_panel.files
+            if files:
+                first_file = files[0] if isinstance(files[0], str) else files[0].get('file', '')
+                try:
+                    if first_file.lower().endswith('.mat'):
+                        from sw_transform.processing.vibrosis import get_vibrosis_file_info
+                        info = get_vibrosis_file_info(first_file)
+                        n_ch = info.get('n_channels', 0)
+                        dx_val = info.get('dx', 0)
+                        if n_ch > 0 and dx_val > 0:
+                            self.array_panel.set_file_info(n_ch, dx_val)
+                            self.log(f"Auto-detected: {n_ch} channels, {dx_val} m spacing")
+                    else:
+                        from sw_transform.processing.seg2 import load_seg2_ar
+                        _, data, _, dx_val, _, _ = load_seg2_ar(first_file)
+                        n_ch = data.shape[1]
+                        if n_ch > 0 and dx_val > 0:
+                            self.array_panel.set_file_info(n_ch, dx_val)
+                            self.log(f"Auto-detected: {n_ch} channels, {dx_val} m spacing")
+                except Exception as e:
+                    self.log(f"Could not auto-detect array config: {e}")
     def _update_preview(self):
         """Update the layout preview."""
         if not self.array_panel or not self.subarray_panel or not self.preview_panel:

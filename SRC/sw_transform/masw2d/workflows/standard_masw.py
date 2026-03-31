@@ -10,13 +10,32 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+import numpy as np
+
 from .base import BaseWorkflow
 from ..config.loader import load_config
 from ..geometry.shot_classifier import classify_all_shots, ShotType, filter_exterior_shots
 from ..geometry.subarray import get_all_subarrays_from_config, flatten_subarrays
 from ..extraction.subarray_extractor import extract_all_subarrays_from_shot
 from ..processing.batch_processor import process_batch, DispersionResult
-from ..output.organizer import organize_results
+from ..output.organizer import organize_results, export_single_result, write_summary_from_metadata
+
+
+def _load_npz_metadata(data) -> dict:
+    """Reconstruct metadata dict from NPZ file, handling mixed types safely."""
+    meta = {}
+    for k in data.files:
+        if k.startswith('meta_'):
+            key = k.replace('meta_', '', 1)
+            val = data[k]
+            if val.ndim == 0:
+                try:
+                    meta[key] = float(val)
+                except (ValueError, TypeError):
+                    meta[key] = str(val)
+            else:
+                meta[key] = val
+    return meta
 
 
 class StandardMASWWorkflow(BaseWorkflow):
@@ -124,6 +143,10 @@ class StandardMASWWorkflow(BaseWorkflow):
     ) -> Dict[str, Any]:
         """Execute the workflow.
         
+        Results are written to disk incrementally (CSV/NPZ) as produced,
+        keeping memory usage bounded. Images are deferred to after all
+        processing completes to avoid matplotlib overhead during transforms.
+        
         Parameters
         ----------
         output_dir : str, optional
@@ -160,8 +183,33 @@ class StandardMASWWorkflow(BaseWorkflow):
         proc_params = self.config.get("processing", {})
         method = proc_params.get("method", "ps")
         
-        # Process each shot
-        all_results: List[DispersionResult] = []
+        # Prepare export settings
+        output_config = self.config.get("output", {})
+        export_formats = output_config.get("export_formats", ["csv"])
+        organize_by = output_config.get("organize_by", "midpoint")
+        include_images = (
+            output_config.get("include_images", False) or
+            any(fmt in export_formats for fmt in ("image", "png", "jpg", "jpeg"))
+        )
+        image_params = {
+            "max_frequency": output_config.get("max_frequency", None),
+            "cmap": output_config.get("cmap", "jet"),
+            "dpi": output_config.get("image_dpi", 150),
+            "auto_velocity_limit": output_config.get("auto_velocity_limit", True),
+            "auto_frequency_limit": output_config.get("auto_frequency_limit", True)
+        }
+        if "max_velocity" in output_config and not output_config.get("auto_velocity_limit", True):
+            image_params["max_velocity"] = output_config["max_velocity"]
+        
+        # When images are deferred, NPZ must be saved during processing
+        # so the image renderer can read data back without keeping it in RAM
+        export_fmts_for_processing = list(export_formats)
+        if include_images and "npz" not in export_fmts_for_processing:
+            export_fmts_for_processing.append("npz")
+        
+        # Lightweight metadata list (replaces all_results accumulation)
+        all_results_meta: List[Dict[str, Any]] = []
+        all_exported_files: List[str] = []
         total_shots = len(shots)
         
         self._report_progress(0, total_shots, "Starting processing...")
@@ -195,17 +243,29 @@ class StandardMASWWorkflow(BaseWorkflow):
                 self._report_progress(total_shots, total_shots, 
                     f"Processing {len(all_extracted)} sub-arrays in parallel...")
                 
-                # Use parallel batch processing
                 from sw_transform.masw2d.processing.batch_processor import process_batch_parallel
-                all_results = process_batch_parallel(
+                results = process_batch_parallel(
                     all_extracted,
                     method=method,
                     processing_params=proc_params,
                     max_workers=max_workers,
                     progress_callback=self._progress_callback
                 )
+                
+                # Write CSV/NPZ immediately (no images yet), then release
+                for result in results:
+                    meta = export_single_result(
+                        result, output_dir,
+                        organize_by=organize_by,
+                        export_formats=export_fmts_for_processing,
+                        include_images=False,
+                        image_params=image_params
+                    )
+                    all_results_meta.append(meta)
+                    all_exported_files.extend(meta['files'])
+                del results  # Free memory
         else:
-            # Sequential processing (original)
+            # Sequential processing with incremental disk writes
             for shot_idx, shot in enumerate(shots):
                 self._report_progress(
                     shot_idx, total_shots,
@@ -213,15 +273,11 @@ class StandardMASWWorkflow(BaseWorkflow):
                 )
                 
                 try:
-                    # Load shot data
                     time, data, _, file_dx, dt, _ = load_seg2_ar(shot.file)
-                    
-                    # Use dx from config (file_dx may be 0)
                     dx = self.config["array"]["dx"]
                     if file_dx > 0:
                         dx = file_dx
                     
-                    # Extract all valid sub-arrays
                     extracted = extract_all_subarrays_from_shot(
                         data, time, dt, dx,
                         shot, subarrays,
@@ -231,66 +287,93 @@ class StandardMASWWorkflow(BaseWorkflow):
                     if not extracted:
                         continue
                     
-                    # Process
                     results = process_batch(
                         extracted,
                         method=method,
                         processing_params=proc_params
                     )
                     
-                    all_results.extend(results)
+                    # Write CSV/NPZ immediately (no images yet), then release
+                    for result in results:
+                        meta = export_single_result(
+                            result, output_dir,
+                            organize_by=organize_by,
+                            export_formats=export_fmts_for_processing,
+                            include_images=False,
+                            image_params=image_params
+                        )
+                        all_results_meta.append(meta)
+                        all_exported_files.extend(meta['files'])
+                    del results  # Free memory
                     
                 except Exception as e:
                     import warnings
                     warnings.warn(f"Failed to process {shot.file}: {e}")
                     continue
         
-        self._report_progress(total_shots, total_shots, "Organizing results...")
+        self._report_progress(total_shots, total_shots, "Writing summary...")
         
-        if not all_results:
+        if not all_results_meta:
             return {
                 "status": "error",
                 "error": "No dispersion curves were extracted",
                 "n_results": 0
             }
         
-        # Organize and export results
-        output_config = self.config.get("output", {})
-        export_formats = output_config.get("export_formats", ["csv"])
-        organize_by = output_config.get("organize_by", "midpoint")
-        # Check both include_images flag and image formats in export_formats
-        include_images = (
-            output_config.get("include_images", False) or 
-            any(fmt in export_formats for fmt in ("image", "png", "jpg", "jpeg"))
-        )
+        # Write summary files from lightweight metadata
+        summary_result = write_summary_from_metadata(all_results_meta, output_dir)
+        all_exported_files.extend(summary_result['files'])
         
-        # Image parameters - only include max_velocity if explicitly set
-        image_params = {
-            "max_frequency": output_config.get("max_frequency", None),
-            "cmap": output_config.get("cmap", "jet"),
-            "dpi": output_config.get("image_dpi", 150),
-            "auto_velocity_limit": output_config.get("auto_velocity_limit", True),
-            "auto_frequency_limit": output_config.get("auto_frequency_limit", True)
+        # Deferred image export: render PNGs from saved NPZ files (after processing)
+        if include_images:
+            npz_files = [m['npz_path'] for m in all_results_meta if m.get('npz_path')]
+            if npz_files:
+                self._report_progress(total_shots, total_shots, "Rendering images...")
+                from ..output.export import export_dispersion_image
+                from ..processing.batch_processor import DispersionResult as DR
+                for i, npz_path in enumerate(npz_files):
+                    try:
+                        with np.load(npz_path, allow_pickle=True) as data:
+                            result = DR(
+                                frequencies=data['frequencies'],
+                                velocities=data['velocities'],
+                                power=data['power'],
+                                picked_velocities=data['picked_velocities'],
+                                wavelengths=data['wavelengths'],
+                                midpoint=float(data['midpoint']),
+                                subarray_config=str(data['subarray_config']),
+                                shot_file=str(data.get('shot_file', '')),
+                                source_offset=float(data['source_offset']),
+                                direction=str(data['direction']),
+                                method=str(data['method']),
+                                metadata=_load_npz_metadata(data)
+                            )
+                        png_path = npz_path.replace('.npz', '.png')
+                        img_p = image_params.copy()
+                        img_p.setdefault('auto_velocity_limit', True)
+                        img_p.setdefault('auto_frequency_limit', True)
+                        export_dispersion_image(result, png_path, **img_p)
+                        all_exported_files.append(png_path)
+                        del result
+                    except Exception as e:
+                        import warnings
+                        warnings.warn(f"Failed to render image from {npz_path}: {e}")
+        
+        midpoints = sorted(set(m['midpoint'] for m in all_results_meta))
+        
+        summary = {
+            "status": "success",
+            "n_results": len(all_results_meta),
+            "n_midpoints": len(midpoints),
+            "midpoints": midpoints,
+            "files": all_exported_files,
+            "organize_by": organize_by,
+            "summary": summary_result.get('summary', {}),
+            "workflow": self.name,
+            "survey_name": self.survey_name,
+            "method": method,
+            "n_shots_processed": total_shots,
         }
-        # Only set max_velocity if explicitly configured (not auto)
-        if "max_velocity" in output_config and not output_config.get("auto_velocity_limit", True):
-            image_params["max_velocity"] = output_config["max_velocity"]
-        
-        summary = organize_results(
-            all_results,
-            output_dir,
-            organize_by=organize_by,
-            export_formats=export_formats,
-            include_summary=True,
-            include_images=include_images,
-            image_params=image_params
-        )
-        
-        # Add workflow info to summary
-        summary["workflow"] = self.name
-        summary["survey_name"] = self.survey_name
-        summary["method"] = method
-        summary["n_shots_processed"] = total_shots
         
         self._report_progress(total_shots, total_shots, "Complete!")
         

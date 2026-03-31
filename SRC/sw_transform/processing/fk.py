@@ -70,25 +70,36 @@ def fk_transform(data, dt, dx, fmin=0.0, fmax=100.0, nvel=400, vmin=50.0, vmax=5
     transform = np.fft.fft(tmatrix, axis=1)
     transform = transform[:, keep_ids]  # Trim to freq range (nchannels, nfreq)
     
-    # Vectorized FK computation (FDBF-style but faster)
-    # Use simple beamforming without full SSCM for speed
+    # Vectorized FK computation using frequency-chunked beamforming
+    # Chunks avoid allocating the full (nvel, nchan, nfreq) steering matrix
     
-    # Create meshgrid for vectorized computation
-    V = velocities[:, np.newaxis, np.newaxis]  # (nvel, 1, 1)
-    X = offsets[np.newaxis, :, np.newaxis]      # (1, nchannels, 1)
-    F = frequencies[np.newaxis, np.newaxis, :]  # (1, 1, nfreq)
+    # Broadcast transform: (nchannels, nfreq)
+    # We process frequency bins in chunks to bound memory usage
     
-    # Wavenumber: k = 2πf/v
-    # Phase shift: exp(+i * k * x) - same convention as FDBF
-    phase = 2.0 * np.pi * F * X / V  # (nvel, nchannels, nfreq)
-    steer = np.exp(1j * phase)
+    MAX_CHUNK_BYTES = 512 * 1024 * 1024  # 512 MB target per chunk
+    bytes_per_element = 16  # complex128
+    elements_per_freq = nvel * nchannels
+    chunk_size = max(1, MAX_CHUNK_BYTES // (elements_per_freq * bytes_per_element))
     
-    # Broadcast transform to match: (nchannels, nfreq) -> (nvel, nchannels, nfreq)
-    U_broad = transform[np.newaxis, :, :]  # (1, nchannels, nfreq)
+    power = np.empty((nvel, nfreq), dtype=np.float64)
     
-    # Beamforming: sum of steered signals
-    inner = steer * U_broad  # (nvel, nchannels, nfreq)
-    power = np.abs(np.sum(inner, axis=1)) ** 2  # (nvel, nfreq), squared for power
+    for f_start in range(0, nfreq, chunk_size):
+        f_end = min(f_start + chunk_size, nfreq)
+        
+        V = velocities[:, np.newaxis, np.newaxis]       # (nvel, 1, 1)
+        X = offsets[np.newaxis, :, np.newaxis]           # (1, nchannels, 1)
+        F_chunk = frequencies[np.newaxis, np.newaxis, f_start:f_end]  # (1, 1, chunk)
+        
+        with np.errstate(divide='ignore', invalid='ignore'):
+            phase = 2.0 * np.pi * F_chunk * X / V       # (nvel, nchannels, chunk)
+            phase = np.where(np.isfinite(phase), phase, 0.0)
+        steer = np.exp(1j * phase)
+        
+        U_chunk = transform[np.newaxis, :, f_start:f_end]  # (1, nchannels, chunk)
+        inner = steer * U_chunk                          # (nvel, nchannels, chunk)
+        power[:, f_start:f_end] = np.abs(np.sum(inner, axis=1)) ** 2
+        
+        del phase, steer, inner, U_chunk
     
     # Normalize per frequency
     max_per_freq = np.nanmax(power, axis=0, keepdims=True)

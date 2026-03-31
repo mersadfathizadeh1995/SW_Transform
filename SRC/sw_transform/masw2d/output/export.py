@@ -39,15 +39,7 @@ def export_dispersion_csv(
         writer = csv.writer(f)
         
         if include_header:
-            # Write metadata as comments
-            f.write(f"# Midpoint: {result.midpoint:.1f} m\n")
-            f.write(f"# Config: {result.subarray_config}\n")
-            f.write(f"# Shot: {result.shot_file}\n")
-            f.write(f"# Offset: {result.source_offset:.1f} m ({result.direction})\n")
-            f.write(f"# Method: {result.method}\n")
-            f.write(f"# Export date: {datetime.now().isoformat()}\n")
-            
-            writer.writerow(["Frequency_Hz", "PhaseVelocity_m_s", "Wavelength_m"])
+            writer.writerow(["Frequency(Hz)", "PhaseVelocity(m/s)", "Wavelength(m)"])
         
         for freq, vel, wav in zip(
             result.frequencies,
@@ -60,6 +52,53 @@ def export_dispersion_csv(
                     f"{vel:.4f}",
                     f"{wav:.4f}" if not np.isnan(wav) else ""
                 ])
+    
+    return filepath
+
+
+def export_metadata_txt(
+    result: DispersionResult,
+    filepath: str
+) -> str:
+    """Export metadata for a dispersion result to a plain text file.
+    
+    Parameters
+    ----------
+    result : DispersionResult
+        Dispersion analysis result
+    filepath : str
+        Output file path (.txt)
+    
+    Returns
+    -------
+    str
+        Path to exported file
+    """
+    Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+    
+    lines = [
+        f"Midpoint: {result.midpoint:.1f} m",
+        f"Config: {result.subarray_config}",
+        f"Shot: {Path(result.shot_file).name}",
+        f"Source Offset: {result.source_offset:.1f} m ({result.direction})",
+        f"Method: {result.method}",
+    ]
+    
+    # Add optional metadata if available
+    meta = result.metadata or {}
+    if 'n_channels' in meta:
+        lines.append(f"N Channels: {meta['n_channels']}")
+    if 'dx' in meta:
+        lines.append(f"Geophone Spacing: {meta['dx']} m")
+    if 'freq_min' in meta and 'freq_max' in meta:
+        lines.append(f"Freq Range: {meta['freq_min']} - {meta['freq_max']} Hz")
+    if 'vel_min' in meta and 'vel_max' in meta:
+        lines.append(f"Velocity Range: {meta['vel_min']} - {meta['vel_max']} m/s")
+    
+    lines.append(f"Export Date: {datetime.now().isoformat()}")
+    
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(lines) + '\n')
     
     return filepath
 
@@ -569,6 +608,101 @@ def export_combined_npz(
     )
     
     return filepath
+
+
+def build_combined_npz_from_files(
+    npz_files: List[str],
+    output_path: str
+) -> str:
+    """Build combined NPZ from individual NPZ files without loading all into RAM.
+    
+    Reads each file one at a time to determine sizes, then builds combined
+    arrays incrementally. Much more memory-efficient than export_combined_npz()
+    for large datasets.
+    
+    Parameters
+    ----------
+    npz_files : list of str
+        Paths to individual NPZ files (from export_dispersion_npz)
+    output_path : str
+        Output path for combined NPZ
+    
+    Returns
+    -------
+    str
+        Path to exported file
+    """
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    
+    if not npz_files:
+        np.savez_compressed(output_path, n_curves=0)
+        return output_path
+    
+    # Read first file to get array dimensions
+    with np.load(npz_files[0], allow_pickle=True) as first:
+        n_freq = len(first['frequencies'])
+        n_vel = len(first['velocities'])
+    
+    n_curves = len(npz_files)
+    
+    # Build lightweight metadata arrays (small)
+    all_picks = np.zeros((n_curves, n_freq), dtype=np.float32)
+    all_wavelengths = np.zeros((n_curves, n_freq), dtype=np.float32)
+    all_frequencies = np.zeros((n_curves, n_freq), dtype=np.float32)
+    all_velocities = np.zeros((n_curves, n_vel), dtype=np.float32)
+    midpoints = np.zeros(n_curves, dtype=np.float32)
+    offsets = np.zeros(n_curves, dtype=np.float32)
+    configs = []
+    directions = []
+    shot_files = []
+    methods = []
+    
+    # Also build full power array — but one file at a time
+    all_power = np.zeros((n_curves, n_vel, n_freq), dtype=np.float32)
+    
+    for i, npz_path in enumerate(npz_files):
+        with np.load(npz_path, allow_pickle=True) as data:
+            nf = min(n_freq, len(data['frequencies']))
+            nv = min(n_vel, len(data['velocities']))
+            
+            all_frequencies[i, :nf] = data['frequencies'][:nf]
+            all_velocities[i, :nv] = data['velocities'][:nv]
+            
+            power = data['power']
+            pv, pf = min(nv, power.shape[0]), min(nf, power.shape[1])
+            all_power[i, :pv, :pf] = power[:pv, :pf]
+            
+            all_picks[i, :nf] = data['picked_velocities'][:nf]
+            all_wavelengths[i, :nf] = data['wavelengths'][:nf]
+            
+            midpoints[i] = float(data['midpoint'])
+            offsets[i] = float(data['source_offset'])
+            configs.append(str(data['subarray_config']))
+            directions.append(str(data['direction']))
+            shot_files.append(str(data.get('shot_file', '')))
+            methods.append(str(data['method']))
+    
+    np.savez_compressed(
+        output_path,
+        frequencies=all_frequencies,
+        velocities=all_velocities,
+        power=all_power,
+        picked_velocities=all_picks,
+        wavelengths=all_wavelengths,
+        midpoints=midpoints,
+        source_offsets=offsets,
+        configs=np.array(configs, dtype=object),
+        directions=np.array(directions, dtype=object),
+        shot_files=np.array(shot_files, dtype=object),
+        methods=np.array(methods, dtype=object),
+        n_curves=n_curves,
+        n_frequencies=n_freq,
+        n_velocities=n_vel,
+        export_date=datetime.now().isoformat(),
+        version='1.0'
+    )
+    
+    return output_path
 
 
 def export_for_dinver(

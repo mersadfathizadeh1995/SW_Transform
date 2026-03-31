@@ -80,24 +80,31 @@ def phase_shift_transform(data, dt, dx, fmin=0.0, fmax=100.0, nvel=400, vmin=50.
     # Amplitude normalize: U/|U|
     U_norm = fft_band / np.maximum(np.abs(fft_band), 1e-12)
     
-    # Create meshgrid for vectorized computation
-    # offsets: (nchannels,), velocities: (nvel,), frequencies: (nfreq,)
-    V = velocities[:, np.newaxis, np.newaxis]  # (nvel, 1, 1)
-    X = offsets[np.newaxis, :, np.newaxis]      # (1, nchannels, 1)
-    F = frequencies[np.newaxis, np.newaxis, :]  # (1, 1, nfreq)
+    # Chunked beamforming to bound memory usage
+    MAX_CHUNK_BYTES = 512 * 1024 * 1024  # 512 MB target per chunk
+    bytes_per_element = 16  # complex128
+    elements_per_freq = nvel * nchannels
+    chunk_size = max(1, MAX_CHUNK_BYTES // (elements_per_freq * bytes_per_element))
     
-    # Phase shift: exp(+i * 2π * f * x / v) - same convention as swprocess
-    phase = 2.0 * np.pi * F * X / V  # (nvel, nchannels, nfreq)
-    shift = np.exp(1j * phase)
+    power = np.empty((nvel, nfreq), dtype=np.float64)
     
-    # Broadcast U_norm to match: (1, nchannels, nfreq) -> (nvel, nchannels, nfreq)
-    U_broad = U_norm[np.newaxis, :, :]  # (1, nchannels, nfreq)
-    
-    # Inner product: shift * U_norm
-    inner = shift * U_broad  # (nvel, nchannels, nfreq)
-    
-    # Sum across channels (simple sum, not trapezoidal for speed)
-    power = np.abs(np.sum(inner, axis=1))  # (nvel, nfreq)
+    for f_start in range(0, nfreq, chunk_size):
+        f_end = min(f_start + chunk_size, nfreq)
+        
+        V = velocities[:, np.newaxis, np.newaxis]       # (nvel, 1, 1)
+        X = offsets[np.newaxis, :, np.newaxis]           # (1, nchannels, 1)
+        F_chunk = frequencies[np.newaxis, np.newaxis, f_start:f_end]  # (1, 1, chunk)
+        
+        with np.errstate(divide='ignore', invalid='ignore'):
+            phase = 2.0 * np.pi * F_chunk * X / V       # (nvel, nchannels, chunk)
+            phase = np.where(np.isfinite(phase), phase, 0.0)
+        shift = np.exp(1j * phase)
+        
+        U_chunk = U_norm[np.newaxis, :, f_start:f_end]   # (1, nchannels, chunk)
+        inner = shift * U_chunk                          # (nvel, nchannels, chunk)
+        power[:, f_start:f_end] = np.abs(np.sum(inner, axis=1))
+        
+        del phase, shift, inner, U_chunk
     
     # Normalize per frequency
     max_per_freq = np.max(power, axis=0, keepdims=True)
