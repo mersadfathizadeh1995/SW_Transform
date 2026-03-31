@@ -124,7 +124,9 @@ def export_dispersion_image(
     auto_velocity_limit: bool = True,
     auto_frequency_limit: bool = True,
     fill_nan: bool = True,
-    nan_color: str = "lightgray"
+    nan_color: str = "lightgray",
+    power_mask_threshold: float = 0.0,
+    smooth_sigma: float = 0.0
 ) -> str:
     """Export dispersion spectrum as PNG image.
     
@@ -155,6 +157,13 @@ def export_dispersion_image(
         If True, fill NaN/masked regions with nan_color instead of white
     nan_color : str
         Color for NaN regions (default: 'lightgray')
+    power_mask_threshold : float
+        Minimum normalized power for display. Values below this fraction of the
+        global max are set to NaN (shown as nan_color). Default: 0.0 (disabled).
+        Set to e.g. 0.02 to mask very low-power regions.
+    smooth_sigma : float
+        If > 0, apply Gaussian smoothing (sigma in grid cells) to the power
+        spectrum before display to reduce visual noise. Default: 0.0 (no smoothing).
     
     Returns
     -------
@@ -177,6 +186,7 @@ def export_dispersion_image(
         min_frequency = result.metadata.get('freq_min', 5.0)
     
     # Auto-detect max frequency from data if requested
+    data_max_freq = freqs[-1] if len(freqs) > 0 else 80.0
     if max_frequency is None and auto_frequency_limit:
         # Find max frequency with significant power
         power_threshold_detect = 0.05
@@ -194,12 +204,16 @@ def export_dispersion_image(
                     max_pick_freq = freqs[np.max(np.where(valid_picks_mask)[0])]
                     detected_max_f = max(detected_max_f, max_pick_freq * 1.1)
                 max_frequency = _round_freq_to_nice_number(detected_max_f * 1.05)
+                # Never exceed the actual data range
+                max_frequency = min(max_frequency, data_max_freq)
             else:
-                max_frequency = result.metadata.get('freq_max', freqs[-1] if len(freqs) > 0 else 80.0)
+                max_frequency = result.metadata.get('freq_max', data_max_freq)
         else:
-            max_frequency = result.metadata.get('freq_max', freqs[-1] if len(freqs) > 0 else 80.0)
+            max_frequency = result.metadata.get('freq_max', data_max_freq)
     elif max_frequency is None:
-        max_frequency = result.metadata.get('freq_max', freqs[-1] if len(freqs) > 0 else 80.0)
+        max_frequency = result.metadata.get('freq_max', data_max_freq)
+    # Final safeguard: never show axis beyond the data
+    max_frequency = min(max_frequency, data_max_freq)
     
     # Get velocity limits - prefer metadata, then auto-detect
     if max_velocity is None:
@@ -239,11 +253,21 @@ def export_dispersion_image(
         if i < power.shape[1]:
             P_vf[:, i] = np.interp(vaxis, vels, power[:, i], left=np.nan, right=np.nan)
     
+    # Optional Gaussian smoothing to reduce visual noise
+    if smooth_sigma > 0:
+        try:
+            from scipy.ndimage import gaussian_filter
+            valid_mask_arr = ~np.isnan(P_vf)
+            P_filled = np.where(valid_mask_arr, P_vf, 0.0)
+            P_vf = gaussian_filter(P_filled, sigma=smooth_sigma)
+            P_vf[~valid_mask_arr] = np.nan
+        except ImportError:
+            pass  # scipy not available, skip smoothing
+    
     # Apply power threshold for display
-    power_threshold = 0.02
     max_power = np.nanmax(P_vf)
     if max_power > 0:
-        P_vf[P_vf < power_threshold * max_power] = np.nan
+        P_vf[P_vf < power_mask_threshold * max_power] = np.nan
     
     # Plot using pcolormesh for proper NaN handling
     fig, ax = plt.subplots(figsize=(8, 6))
@@ -259,7 +283,7 @@ def export_dispersion_image(
     X, Y = np.meshgrid(freqs, vaxis)
     valid_power = P_vf[~np.isnan(P_vf)]
     if len(valid_power) > 0:
-        vmin = power_threshold * max_power
+        vmin = power_mask_threshold * max_power
         vmax = np.max(valid_power)
     else:
         vmin, vmax = 0, 1
@@ -272,9 +296,17 @@ def export_dispersion_image(
     ax.plot(freqs[valid_mask], picks[valid_mask], 'o', 
             mfc='none', mec='white', ms=4, mew=1.5, label="Picks")
     
-    # Title with metadata
+    # Title with metadata and offset quality
     title = f"{result.method.upper()} Dispersion - Midpoint {result.midpoint:.1f}m"
-    subtitle = f"Config: {result.subarray_config}, Offset: {result.source_offset:.1f}m ({result.direction})"
+    subarray_length = result.metadata.get('subarray_length', 0)
+    offset_ratio_str = ""
+    if subarray_length > 0 and result.source_offset > 0:
+        ratio = result.source_offset / subarray_length
+        offset_ratio_str = f", d/L={ratio:.2f}"
+        if ratio > 1.5:
+            offset_ratio_str += " (far)"
+    subtitle = (f"Config: {result.subarray_config}, "
+                f"Offset: {result.source_offset:.1f}m ({result.direction}){offset_ratio_str}")
     ax.set_title(f"{title}\n{subtitle}", fontsize=10)
     
     ax.set_xlabel("Frequency (Hz)")
