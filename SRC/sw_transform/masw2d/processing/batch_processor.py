@@ -38,7 +38,10 @@ class DispersionResult:
     shot_file : str
         Source shot file path
     source_offset : float
-        Source offset (m)
+        Source offset (m) — distance from source to nearest sub-array edge
+    source_position : float
+        Absolute source position (m) relative to the full line's first geophone.
+        Negative means left of line start.
     direction : str
         Propagation direction
     method : str
@@ -55,6 +58,7 @@ class DispersionResult:
     subarray_config: str
     shot_file: str
     source_offset: float
+    source_position: float
     direction: str
     method: str
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -185,31 +189,29 @@ def process_subarray(
     analyze_func = dyn(cfg["analyze"])
     
     # Use unified transform interface: all return (frequencies, velocities, power)
-    if method in ("fk", "fdbf"):
-        # FK and FDBF use nvel for velocity grid
-        transform_kwargs = dict(
-            fmin=freq_min, fmax=freq_max,
-            nvel=grid_n, vmin=velocity_min, vmax=velocity_max,
-            vspace='linear'  # FK/FDBF typically use linear
-        )
-        # FDBF-specific: add weighting for vibrosis sources and cylindrical steering
-        if method == "fdbf":
-            weighting = 'invamp' if source_type == 'vibrosis' else 'none'
-            steering = 'cylindrical' if cylindrical else 'plane'
-            transform_kwargs['weighting'] = weighting
-            transform_kwargs['steering'] = steering
-        
-        frequencies, velocities, power = transform_func(
-            data, dt, dx, **transform_kwargs
-        )
-    else:
-        # PS and SS
-        frequencies, velocities, power = transform_func(
-            data, dt, dx,
-            fmin=freq_min, fmax=freq_max,
-            nvel=grid_n, vmin=velocity_min, vmax=velocity_max,
-            vspace=vspace
-        )
+    # Clamp vmin for log spacing (geomspace cannot include zero)
+    effective_vmin = velocity_min
+    if vspace == 'log' and effective_vmin <= 0:
+        effective_vmin = 1.0
+    
+    # Common kwargs for ALL methods (matches service.py convention)
+    transform_kwargs = dict(
+        fmin=freq_min, fmax=freq_max,
+        nvel=grid_n, vmin=effective_vmin, vmax=velocity_max,
+        vspace=vspace
+    )
+    # FDBF-specific: add weighting for vibrosis sources and cylindrical steering
+    weighting = 'none'
+    steering = 'plane'
+    if method == "fdbf":
+        weighting = 'invamp' if source_type == 'vibrosis' else 'none'
+        steering = 'cylindrical' if cylindrical else 'plane'
+        transform_kwargs['weighting'] = weighting
+        transform_kwargs['steering'] = steering
+    
+    frequencies, velocities, power = transform_func(
+        data, dt, dx, **transform_kwargs
+    )
     
     # Analyze: pick peaks
     pnorm, vmax, wav, frequencies = analyze_func(frequencies, velocities, power)
@@ -233,6 +235,7 @@ def process_subarray(
         subarray_config=extracted.config_name,
         shot_file=extracted.shot_info.file,
         source_offset=extracted.source_offset,
+        source_position=extracted.shot_info.source_position,
         direction=extracted.direction,
         method=method,
         metadata={
@@ -244,7 +247,11 @@ def process_subarray(
             "source_type": source_type,
             "power_threshold": power_threshold,
             "n_channels": extracted.n_channels,
-            "subarray_length": extracted.subarray_def.length
+            "subarray_length": extracted.subarray_def.length,
+            "vspace": vspace,
+            "cylindrical": cylindrical,
+            "weighting": weighting,
+            "steering": steering,
         }
     )
 
@@ -304,12 +311,17 @@ def process_vibrosis_subarray(
     frequencies = extracted.frequencies
     dx = extracted.dx
     
+    # Clamp vmin for log spacing (geomspace cannot include zero)
+    effective_vmin = velocity_min
+    if vspace == 'log' and effective_vmin <= 0:
+        effective_vmin = 1.0
+    
     # FDBF transform from R matrix (only valid method for vibrosis)
     steering = 'cylindrical' if cylindrical else 'plane'
     freq_out, velocities, power = fdbf_transform_from_R_vectorized(
         R, frequencies, dx,
         fmin=freq_min, fmax=freq_max,
-        nvel=grid_n, vmin=velocity_min, vmax=velocity_max,
+        nvel=grid_n, vmin=effective_vmin, vmax=velocity_max,
         vspace=vspace, steering=steering
     )
     
@@ -333,6 +345,7 @@ def process_vibrosis_subarray(
     # Build metadata
     shot_file = extracted.shot_info.file if extracted.shot_info else "vibrosis.mat"
     source_offset = extracted.shot_info.source_position if extracted.shot_info else 0.0
+    source_position = extracted.shot_info.source_position if extracted.shot_info else 0.0
     
     return DispersionResult(
         frequencies=freq_out,
@@ -344,7 +357,8 @@ def process_vibrosis_subarray(
         subarray_config=extracted.config_name,
         shot_file=shot_file,
         source_offset=source_offset,
-        direction="forward",  # Vibrosis typically forward propagation
+        source_position=source_position,
+        direction="forward",
         method="fdbf",
         metadata={
             "freq_min": freq_min,
@@ -357,7 +371,10 @@ def process_vibrosis_subarray(
             "power_threshold": power_threshold,
             "n_channels": extracted.n_channels,
             "subarray_length": extracted.subarray_def.length if extracted.subarray_def else 0,
-            "file_type": "mat"
+            "file_type": "mat",
+            "vspace": vspace,
+            "weighting": "invamp",
+            "steering": steering,
         }
     )
 

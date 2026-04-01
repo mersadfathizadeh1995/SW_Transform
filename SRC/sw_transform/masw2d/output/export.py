@@ -80,6 +80,7 @@ def export_metadata_txt(
         f"Midpoint: {result.midpoint:.1f} m",
         f"Config: {result.subarray_config}",
         f"Shot: {Path(result.shot_file).name}",
+        f"Source Position: {getattr(result, 'source_position', 0.0):.1f} m",
         f"Source Offset: {result.source_offset:.1f} m ({result.direction})",
         f"Method: {result.method}",
     ]
@@ -123,21 +124,49 @@ def export_dispersion_npz(
     """
     Path(filepath).parent.mkdir(parents=True, exist_ok=True)
     
-    # Prepare metadata
+    # Derive offset string matching normal-mode convention (e.g., "+66" or "-2")
+    src_pos = float(getattr(result, 'source_position', 0.0))
+    if src_pos >= 0:
+        offset_str = f"+{src_pos:g}"
+    else:
+        offset_str = f"{src_pos:g}"
+    
+    # Derive file_type from shot_file extension
+    shot_ext = str(result.shot_file).rsplit('.', 1)[-1].lower() if result.shot_file else 'seg2'
+    file_type = 'mat' if shot_ext == 'mat' else 'seg2'
+    
+    # Derive extra metadata from result.metadata (populated by batch_processor)
+    meta = result.metadata or {}
+    source_type = meta.get('source_type', 'hammer')
+    vibrosis_mode = (source_type == 'vibrosis' or file_type == 'mat')
+    vspace_val = meta.get('vspace', 'linear')
+    weighting_val = meta.get('weighting', 'none')
+    steering_val = meta.get('steering', 'plane')
+    
+    # Prepare data — core keys match normal-mode format exactly
     data = {
         'frequencies': np.asarray(result.frequencies, dtype=np.float32),
         'velocities': np.asarray(result.velocities, dtype=np.float32),
         'power': np.asarray(result.power, dtype=np.float32),
         'picked_velocities': np.asarray(result.picked_velocities, dtype=np.float32),
+        # Normal-mode compatible keys
+        'method': str(result.method),
+        'offset': offset_str,
+        'export_date': datetime.now().isoformat(),
+        'version': '1.0',
+        'file_type': file_type,
+        'vibrosis_mode': vibrosis_mode,
+        'vspace': vspace_val,
+        'weighting': weighting_val,
+        'steering': steering_val,
+        # MASW 2D extras (don't hurt compatibility)
         'wavelengths': np.asarray(result.wavelengths, dtype=np.float32),
         'midpoint': float(result.midpoint),
         'subarray_config': str(result.subarray_config),
         'shot_file': str(result.shot_file),
         'source_offset': float(result.source_offset),
+        'source_position': src_pos,
         'direction': str(result.direction),
-        'method': str(result.method),
-        'export_date': datetime.now().isoformat(),
-        'version': '1.0'
     }
     
     # Add metadata dict entries
@@ -344,8 +373,16 @@ def export_dispersion_image(
         offset_ratio_str = f", d/L={ratio:.2f}"
         if ratio > 1.5:
             offset_ratio_str += " (far)"
-    subtitle = (f"Config: {result.subarray_config}, "
-                f"Offset: {result.source_offset:.1f}m ({result.direction}){offset_ratio_str}")
+    # Include source position matching the filename format: src{pos}m(off{offset}m)_{dir}
+    src_pos = getattr(result, 'source_position', None)
+    if src_pos is not None:
+        dir_tag = "fwd" if result.direction == "forward" else "rev"
+        subtitle = (f"Config: {result.subarray_config}, "
+                    f"Src: {src_pos:.1f}m (Off: {result.source_offset:.1f}m, {dir_tag})"
+                    f"{offset_ratio_str}")
+    else:
+        subtitle = (f"Config: {result.subarray_config}, "
+                    f"Offset: {result.source_offset:.1f}m ({result.direction}){offset_ratio_str}")
     ax.set_title(f"{title}\n{subtitle}", fontsize=10)
     
     ax.set_xlabel("Frequency (Hz)")

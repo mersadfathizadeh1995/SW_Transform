@@ -16,6 +16,7 @@ Components:
 """
 
 from sw_transform.masw2d.gui.defaults import MASW2D_DEFAULTS
+from sw_transform.masw2d.gui.collapsible import CollapsibleLabelFrame
 from sw_transform.masw2d.gui.array_setup import ArraySetupPanel
 from sw_transform.masw2d.gui.file_manager import FileManagerPanel
 from sw_transform.masw2d.gui.subarray_config import SubarrayConfigPanel
@@ -27,6 +28,7 @@ from sw_transform.masw2d.gui.advanced_settings import MASW2DAdvancedSettings
 
 __all__ = [
     'MASW2D_DEFAULTS',
+    'CollapsibleLabelFrame',
     'ArraySetupPanel',
     'FileManagerPanel',
     'SubarrayConfigPanel',

@@ -34,8 +34,8 @@ MASW2D_DEFAULTS = {
     
     # Processing defaults
     'method': 'ps',
-    'freq_min': '5',
-    'freq_max': '80',
-    'vel_min': '100',
-    'vel_max': '1500',
+    'freq_min': '0',
+    'freq_max': '100',
+    'vel_min': '0',
+    'vel_max': '4000',
 }

@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Callable
 # Import GUI components from masw2d.gui package
 from sw_transform.masw2d.gui import (
     MASW2D_DEFAULTS,
+    CollapsibleLabelFrame,
     ArraySetupPanel,
     FileManagerPanel,
     SubarrayConfigPanel,
@@ -108,36 +109,46 @@ class MASW2DTab:
         scrollbar.pack(side="right", fill="y")
         canvas.pack(side="left", fill="both", expand=True)
         # ===== 1. Array Setup Panel =====
+        self._array_collapse = CollapsibleLabelFrame(scrollable, title="Array Setup")
+        self._array_collapse.pack(fill="x", padx=4, pady=2)
         self.array_panel = ArraySetupPanel(
-            scrollable,
+            self._array_collapse.content,
             on_update=self._on_array_updated
         )
-        self.array_panel.pack(fill="x", padx=4, pady=4)
+        self.array_panel.pack(fill="x")
         # ===== 2. File Manager Panel =====
+        self._file_collapse = CollapsibleLabelFrame(scrollable, title="Shot Files")
+        self._file_collapse.pack(fill="x", padx=4, pady=2)
         self.file_panel = FileManagerPanel(
-            scrollable,
+            self._file_collapse.content,
             main_app=self.main_app,
             log_callback=self.log,
             array_length_getter=self._get_array_length,
             on_files_changed=self._on_files_changed
         )
-        self.file_panel.pack(fill="x", padx=4, pady=4)
+        self.file_panel.pack(fill="x")
         # ===== 3. Sub-Array Config Panel =====
+        self._subarray_collapse = CollapsibleLabelFrame(scrollable, title="Sub-Array Configurations")
+        self._subarray_collapse.pack(fill="x", padx=4, pady=2)
         self.subarray_panel = SubarrayConfigPanel(
-            scrollable,
+            self._subarray_collapse.content,
             n_channels_getter=self._get_n_channels,
             on_preview_change=self._update_preview
         )
-        self.subarray_panel.pack(fill="x", padx=4, pady=4)
+        self.subarray_panel.pack(fill="x")
         # ===== 4. Processing Panel =====
+        self._processing_collapse = CollapsibleLabelFrame(scrollable, title="Processing")
+        self._processing_collapse.pack(fill="x", padx=4, pady=2)
         self.processing_panel = ProcessingPanel(
-            scrollable,
+            self._processing_collapse.content,
             on_advanced_click=self._open_advanced_settings
         )
-        self.processing_panel.pack(fill="x", padx=4, pady=4)
+        self.processing_panel.pack(fill="x")
         # ===== 5. Output Panel =====
-        self.output_panel = OutputPanel(scrollable)
-        self.output_panel.pack(fill="x", padx=4, pady=4)
+        self._output_collapse = CollapsibleLabelFrame(scrollable, title="Output")
+        self._output_collapse.pack(fill="x", padx=4, pady=2)
+        self.output_panel = OutputPanel(self._output_collapse.content)
+        self.output_panel.pack(fill="x")
         # ===== 6. Run Panel =====
         self.run_panel = MASW2DRunPanel(
             scrollable,
@@ -176,28 +187,37 @@ class MASW2DTab:
             self.log("Vibrosis .mat files detected - FDBF mode enabled")
         
         # Auto-detect receiver geometry from first file
-        if self.file_panel and self.array_panel:
-            files = self.file_panel.files
-            if files:
-                first_file = files[0] if isinstance(files[0], str) else files[0].get('file', '')
-                try:
-                    if first_file.lower().endswith('.mat'):
-                        from sw_transform.processing.vibrosis import get_vibrosis_file_info
-                        info = get_vibrosis_file_info(first_file)
-                        n_ch = info.get('n_channels', 0)
-                        dx_val = info.get('dx', 0)
-                        if n_ch > 0 and dx_val > 0:
-                            self.array_panel.set_file_info(n_ch, dx_val)
-                            self.log(f"Auto-detected: {n_ch} channels, {dx_val} m spacing")
-                    else:
-                        from sw_transform.processing.seg2 import load_seg2_ar
-                        _, data, _, dx_val, _, _ = load_seg2_ar(first_file)
-                        n_ch = data.shape[1]
-                        if n_ch > 0 and dx_val > 0:
-                            self.array_panel.set_file_info(n_ch, dx_val)
-                            self.log(f"Auto-detected: {n_ch} channels, {dx_val} m spacing")
-                except Exception as e:
-                    self.log(f"Could not auto-detect array config: {e}")
+        if not self.file_panel or not self.array_panel:
+            return
+        files = self.file_panel.files
+        if not files:
+            return
+        first_file = files[0] if isinstance(files[0], str) else files[0].get('file', '')
+        if not first_file:
+            return
+        try:
+            n_ch = 0
+            dx_val = 0.0
+            if first_file.lower().endswith('.mat'):
+                from sw_transform.processing.vibrosis import get_vibrosis_file_info
+                info = get_vibrosis_file_info(first_file)
+                n_ch = info.get('n_channels', 0)
+                dx_val = info.get('dx', 0)
+            else:
+                from sw_transform.processing.seg2 import load_seg2_ar
+                _, data, _, dx_val, _, _ = load_seg2_ar(first_file)
+                n_ch = data.shape[1]
+            # Update array panel — set whatever we detected
+            if n_ch > 0 or dx_val > 0:
+                self.array_panel.set_file_info(
+                    n_ch if n_ch > 0 else self.array_panel.n_channels,
+                    dx_val if dx_val > 0 else self.array_panel.dx,
+                )
+                self.log(f"Array auto-detected from file: {n_ch} channels, {dx_val:.2f} m spacing")
+            else:
+                self.log(f"Could not detect array info from file (channels={n_ch}, dx={dx_val})")
+        except Exception as e:
+            self.log(f"Could not auto-detect array config: {e}")
     def _update_preview(self):
         """Update the layout preview."""
         if not self.array_panel or not self.subarray_panel or not self.preview_panel:
@@ -423,6 +443,15 @@ class MASW2DTab:
                 "organize_by": "midpoint",
                 "export_formats": ["csv", "npz", "image"],
                 "include_images": output_values['include_images'],
+                "export_individual_npz": output_values.get('export_individual_npz', True),
+                "export_combined_csv_per_midpoint": output_values.get(
+                    'export_combined_csv_per_midpoint', True),
+                "export_combined_npz_per_midpoint": output_values.get(
+                    'export_combined_npz_per_midpoint', True),
+                "generate_summary": output_values.get('generate_summary', True),
+                "export_midpoint_summary": output_values.get('export_midpoint_summary', True),
+                "export_all_picks": output_values.get('export_all_picks', True),
+                "export_combined_npz": output_values.get('export_combined_npz', False),
                 "max_velocity": plot_max_vel,
                 "max_frequency": plot_max_freq,
                 "auto_velocity_limit": auto_velocity_limit,

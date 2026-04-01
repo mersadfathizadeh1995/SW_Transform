@@ -18,7 +18,10 @@ from ..geometry.shot_classifier import classify_all_shots, ShotType, filter_exte
 from ..geometry.subarray import get_all_subarrays_from_config, flatten_subarrays
 from ..extraction.subarray_extractor import extract_all_subarrays_from_shot
 from ..processing.batch_processor import process_batch, DispersionResult
-from ..output.organizer import organize_results, export_single_result, write_summary_from_metadata
+from ..output.organizer import (
+    organize_results, export_single_result, write_summary_from_metadata,
+    write_combined_csv_per_midpoint, write_combined_npz_per_midpoint
+)
 
 
 def _load_npz_metadata(data) -> dict:
@@ -202,9 +205,15 @@ class StandardMASWWorkflow(BaseWorkflow):
             image_params["max_velocity"] = output_config["max_velocity"]
         
         # When images are deferred, NPZ must be saved during processing
-        # so the image renderer can read data back without keeping it in RAM
+        # so the image renderer can read data back without keeping it in RAM.
+        # Also needed for combined NPZ per midpoint.
         export_fmts_for_processing = list(export_formats)
-        if include_images and "npz" not in export_fmts_for_processing:
+        needs_npz = (
+            include_images or
+            output_config.get("export_combined_npz_per_midpoint", True) or
+            output_config.get("export_individual_npz", True)
+        )
+        if needs_npz and "npz" not in export_fmts_for_processing:
             export_fmts_for_processing.append("npz")
         
         # Lightweight metadata list (replaces all_results accumulation)
@@ -320,9 +329,36 @@ class StandardMASWWorkflow(BaseWorkflow):
                 "n_results": 0
             }
         
-        # Write summary files from lightweight metadata
-        summary_result = write_summary_from_metadata(all_results_meta, output_dir)
-        all_exported_files.extend(summary_result['files'])
+        # Write combined CSV per midpoint (for DC Cut compatibility)
+        if output_config.get("export_combined_csv_per_midpoint", True):
+            combined_csv_files = write_combined_csv_per_midpoint(
+                all_results_meta, output_dir, organize_by
+            )
+            all_exported_files.extend(combined_csv_files)
+        
+        # Write combined NPZ per midpoint (for refinement workflow)
+        if output_config.get("export_combined_npz_per_midpoint", True):
+            combined_npz_files = write_combined_npz_per_midpoint(
+                all_results_meta, output_dir, organize_by
+            )
+            all_exported_files.extend(combined_npz_files)
+        
+        # Write summary files (optional, controlled by config)
+        generate_summary = output_config.get("generate_summary", True)
+        summary_result = {}
+        
+        if generate_summary:
+            export_midpoint_summary = output_config.get("export_midpoint_summary", True)
+            export_all_picks = output_config.get("export_all_picks", True)
+            export_combined_npz = output_config.get("export_combined_npz", False)
+            
+            summary_result = write_summary_from_metadata(
+                all_results_meta, output_dir,
+                write_midpoint_summary=export_midpoint_summary,
+                write_all_picks=export_all_picks,
+                write_combined_npz=export_combined_npz,
+            )
+            all_exported_files.extend(summary_result['files'])
         
         # Deferred image export: render PNGs from saved NPZ files (after processing)
         if include_images:
@@ -344,6 +380,7 @@ class StandardMASWWorkflow(BaseWorkflow):
                                 subarray_config=str(data['subarray_config']),
                                 shot_file=str(data.get('shot_file', '')),
                                 source_offset=float(data['source_offset']),
+                                source_position=float(data.get('source_position', 0.0)),
                                 direction=str(data['direction']),
                                 method=str(data['method']),
                                 metadata=_load_npz_metadata(data)
