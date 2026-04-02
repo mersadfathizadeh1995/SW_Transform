@@ -118,8 +118,20 @@ class FileTreePanel(tk.Frame):
             else:
                 # SEG-2 .dat file
                 self.file_types[base] = 'seg2'
-                self.offsets[base] = "+0"
                 self.reverse_flags[base] = False
+                
+                # Try to extract source position from SEG-2 header
+                if auto_detect:
+                    try:
+                        from sw_transform.processing.seg2 import load_seg2_ar
+                        _, _, shotpoint, _, _, _ = load_seg2_ar(f)
+                        # Shotpoint = -SOURCE_LOCATION[0]; source position = -Shotpoint
+                        src_pos = -shotpoint if shotpoint != 0.0 else 0.0
+                        self.offsets[base] = f"{src_pos:+.0f}"
+                    except Exception:
+                        self.offsets[base] = "+0"
+                else:
+                    self.offsets[base] = "+0"
         
         # Refresh tree view
         self._refresh()
