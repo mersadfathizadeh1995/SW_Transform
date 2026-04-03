@@ -194,7 +194,11 @@ def export_dispersion_image(
     fill_nan: bool = True,
     nan_color: str = "lightgray",
     power_mask_threshold: float = 0.0,
-    smooth_sigma: float = 0.0
+    smooth_sigma: float = 0.0,
+    fig_width=8,
+    fig_height=6,
+    contour_levels=30,
+    plot_style: str = "contourf"
 ) -> str:
     """Export dispersion spectrum as PNG image.
     
@@ -337,8 +341,11 @@ def export_dispersion_image(
     if max_power > 0:
         P_vf[P_vf < power_mask_threshold * max_power] = np.nan
     
-    # Plot using pcolormesh for proper NaN handling
-    fig, ax = plt.subplots(figsize=(8, 6))
+    # Plot using configurable style
+    fig_w = float(fig_width) if fig_width else 8
+    fig_h = float(fig_height) if fig_height else 6
+    n_levels = int(contour_levels) if contour_levels else 30
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
     
     # Create colormap with NaN color
     cmap_obj = plt.cm.get_cmap(cmap).copy()
@@ -347,7 +354,6 @@ def export_dispersion_image(
     else:
         cmap_obj.set_bad(color='white')
     
-    # Use pcolormesh for better NaN handling
     X, Y = np.meshgrid(freqs, vaxis)
     valid_power = P_vf[~np.isnan(P_vf)]
     if len(valid_power) > 0:
@@ -356,8 +362,13 @@ def export_dispersion_image(
     else:
         vmin, vmax = 0, 1
     
-    pcm = ax.pcolormesh(X, Y, P_vf, cmap=cmap_obj, vmin=vmin, vmax=vmax, shading='auto')
-    plt.colorbar(pcm, ax=ax, label="Normalized Power")
+    if plot_style == 'contourf':
+        P_masked = np.ma.masked_invalid(P_vf)
+        cf = ax.contourf(X, Y, P_masked, levels=n_levels, cmap=cmap_obj, vmin=vmin, vmax=vmax)
+        plt.colorbar(cf, ax=ax, label="Normalized Power")
+    else:
+        pcm = ax.pcolormesh(X, Y, P_vf, cmap=cmap_obj, vmin=vmin, vmax=vmax, shading='auto')
+        plt.colorbar(pcm, ax=ax, label="Normalized Power")
     
     # Plot picks
     valid_mask = ~np.isnan(picks)

@@ -276,6 +276,21 @@ def run_single(params: Dict[str, Any]) -> Tuple[str, bool, str]:
     cmap = params.get('cmap', 'jet')
     freq_tick_spacing = params.get('freq_tick_spacing', 'auto')
     vel_tick_spacing = params.get('vel_tick_spacing', 'auto')
+    
+    # Figure size and plot style
+    try:
+        fig_width = float(params.get('fig_width', '8'))
+    except (ValueError, TypeError):
+        fig_width = 8.0
+    try:
+        fig_height = float(params.get('fig_height', '6'))
+    except (ValueError, TypeError):
+        fig_height = 6.0
+    try:
+        contour_levels = int(params.get('contour_levels', '30'))
+    except (ValueError, TypeError):
+        contour_levels = 30
+    plot_style = params.get('plot_style', 'contourf')
 
     try:
         import matplotlib as mpl
@@ -459,7 +474,11 @@ def run_single(params: Dict[str, Any]) -> Tuple[str, bool, str]:
             fig_name=fig_name,
             cmap=cmap,
             freq_tick_spacing=freq_tick_spacing,
-            vel_tick_spacing=vel_tick_spacing
+            vel_tick_spacing=vel_tick_spacing,
+            fig_width=fig_width,
+            fig_height=fig_height,
+            contour_levels=contour_levels,
+            plot_style=plot_style
         ))
         plot_func(f, vels, pnorm, vmax_display, **plot_kwargs)
         

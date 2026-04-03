@@ -228,7 +228,8 @@ def analyze_fdbf_spectrum(freq_sub, velocities, power, normalization="frequency-
 def plot_fdbf_dispersion(freq_sub, velocities, pnorm, vmax_picks, vmin_plot=0, vmax_plot=5000,
                          min_frequency=0, max_frequency=None, title="FDBF Dispersion", cmap="jet",
                          offset_label="", fig_name="", power_mask_threshold=0.0,
-                         freq_tick_spacing='auto', vel_tick_spacing='auto'):
+                         freq_tick_spacing='auto', vel_tick_spacing='auto',
+                         fig_width=8, fig_height=6, contour_levels=30, plot_style='contourf'):
     """Plot FDBF dispersion in frequency-velocity domain.
     
     Parameters
@@ -278,9 +279,16 @@ def plot_fdbf_dispersion(freq_sub, velocities, pnorm, vmax_picks, vmin_plot=0, v
         if global_max > 0:
             P_plot[P_plot < power_mask_threshold * global_max] = np.nan
     
-    fig, ax = plt.subplots(figsize=(8, 6))
+    fig_w = float(fig_width) if fig_width else 8
+    fig_h = float(fig_height) if fig_height else 6
+    n_levels = int(contour_levels) if contour_levels else 30
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
     P_masked = np.ma.masked_invalid(P_plot)
-    cf = ax.contourf(F, V, P_masked, levels=30, cmap=cmap)
+    if plot_style == 'pcolormesh':
+        cf = ax.pcolormesh(F, V, P_masked, cmap=cmap, shading='auto')
+    else:
+        cf = ax.contourf(F, V, P_masked, levels=n_levels, cmap=cmap)
     plt.colorbar(cf, label="Normalized Power")
     ax.plot(freq_sub, vmax_picks, 'o', mfc='none', mec='white', ms=4, label="Dispersion Picks")
     
@@ -291,12 +299,10 @@ def plot_fdbf_dispersion(freq_sub, velocities, pnorm, vmax_picks, vmin_plot=0, v
     ax.set_xlim(min_frequency, max_frequency)
     ax.set_ylim(vmin_plot, vmax_plot)
     
-    # Apply custom tick spacing with adaptive font sizing
     if freq_tick_spacing != 'auto':
         try:
             spacing = float(freq_tick_spacing)
             ax.xaxis.set_major_locator(ticker.MultipleLocator(spacing))
-            # Smaller font and rotation for finer spacing to prevent overlap
             if spacing <= 2:
                 ax.tick_params(axis='x', labelsize=7, rotation=45)
             elif spacing <= 5:
@@ -309,7 +315,6 @@ def plot_fdbf_dispersion(freq_sub, velocities, pnorm, vmax_picks, vmin_plot=0, v
         try:
             spacing = float(vel_tick_spacing)
             ax.yaxis.set_major_locator(ticker.MultipleLocator(spacing))
-            # Smaller font for finer spacing to prevent overlap
             if spacing <= 25:
                 ax.tick_params(axis='y', labelsize=7)
             elif spacing <= 50:
@@ -323,7 +328,6 @@ def plot_fdbf_dispersion(freq_sub, velocities, pnorm, vmax_picks, vmin_plot=0, v
     ax.legend()
     plt.tight_layout()
     
-    # Re-apply limits after tight_layout to ensure they stick
     ax.set_xlim(min_frequency, max_frequency)
     ax.set_ylim(vmin_plot, vmax_plot)
     

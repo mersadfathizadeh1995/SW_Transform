@@ -25,6 +25,10 @@ MASW2D_DEFAULTS = {
     'plot_max_freq': 'auto',
     'cmap': 'jet',
     'dpi': '150',
+    'fig_width': '8',
+    'fig_height': '6',
+    'contour_levels': '30',
+    'plot_style': 'contourf',
     
     # Array defaults
     'n_channels': '24',

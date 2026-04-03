@@ -42,6 +42,10 @@ PLOT_DEFAULTS = {
     'cmap': 'jet',
     'dpi': '200',
     'export_spectra': True,
+    'fig_width': '8',
+    'fig_height': '6',
+    'contour_levels': '30',
+    'plot_style': 'contourf',
 }
 
 # Processing limits defaults (from lines 82-88)
@@ -88,6 +92,10 @@ DEFAULTS = {
     'cmap': PLOT_DEFAULTS['cmap'],
     'dpi': PLOT_DEFAULTS['dpi'],
     'export_spectra': PLOT_DEFAULTS['export_spectra'],
+    'fig_width': PLOT_DEFAULTS['fig_width'],
+    'fig_height': PLOT_DEFAULTS['fig_height'],
+    'contour_levels': PLOT_DEFAULTS['contour_levels'],
+    'plot_style': PLOT_DEFAULTS['plot_style'],
     # Vibrosis
     'dx': VIBROSIS_DEFAULTS['dx'],
 }

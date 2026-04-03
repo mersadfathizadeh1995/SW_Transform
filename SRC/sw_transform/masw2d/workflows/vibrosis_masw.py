@@ -196,7 +196,11 @@ class VibrosisMASWWorkflow(BaseWorkflow):
             "cmap": output_config.get("cmap", "jet"),
             "dpi": output_config.get("image_dpi", 150),
             "auto_velocity_limit": output_config.get("auto_velocity_limit", True),
-            "auto_frequency_limit": output_config.get("auto_frequency_limit", True)
+            "auto_frequency_limit": output_config.get("auto_frequency_limit", True),
+            "fig_width": output_config.get("fig_width", 8),
+            "fig_height": output_config.get("fig_height", 6),
+            "contour_levels": output_config.get("contour_levels", 30),
+            "plot_style": output_config.get("plot_style", "contourf")
         }
         if "max_velocity" in output_config and not output_config.get("auto_velocity_limit", True):
             image_params["max_velocity"] = output_config["max_velocity"]

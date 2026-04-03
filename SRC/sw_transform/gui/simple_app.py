@@ -124,7 +124,8 @@ class SimpleMASWGUI:
         btn_clear.pack(side="left", padx=4)
 
         # File tree component
-        self.file_tree = FileTreePanel(left, log_callback=self._log)
+        self.file_tree = FileTreePanel(left, log_callback=self._log,
+                                       on_offset_change=self._on_file_offset_change)
         self.file_tree.pack(fill="both", expand=True, padx=8, pady=4)
 
         # Center panel - Notebook with tabs
@@ -268,10 +269,23 @@ class SimpleMASWGUI:
         # Auto-detect receiver geometry from first file
         if self.file_tree.files:
             try:
-                from sw_transform.processing.seg2 import load_seg2_ar
                 import numpy as np
                 first_file = self.file_tree.files[0]
-                if not first_file.lower().endswith('.mat'):
+                if first_file.lower().endswith('.mat'):
+                    # Vibrosis .mat file: detect channel count from file
+                    from sw_transform.processing.vibrosis import get_vibrosis_file_info
+                    info = get_vibrosis_file_info(first_file)
+                    if info.get('valid'):
+                        n_channels = info['n_channels']
+                        dx = float(self.advanced.dx_var.get())
+                        if self.array_config:
+                            self.array_config.set_file_info(n_channels, dx)
+                        if self.source_config:
+                            positions = (np.arange(n_channels) * dx).tolist()
+                            self.source_config.update_receiver_positions(positions)
+                else:
+                    # SEG-2 .dat file
+                    from sw_transform.processing.seg2 import load_seg2_ar
                     _, T, _, Spacing, _, _ = load_seg2_ar(first_file)
                     n_channels = T.shape[1]
                     if self.array_config:
@@ -350,6 +364,11 @@ class SimpleMASWGUI:
             except Exception:
                 pass
     
+    def _on_file_offset_change(self, base: str, new_offset: str):
+        """Callback when user edits offset in file tree — sync to source config."""
+        if self.source_config:
+            self.source_config.update_files(self.file_tree.file_data)
+
     def _on_source_config_change(self):
         """Callback when source configuration changes - refresh preview if file loaded."""
         if self.file_tree and self.file_tree.files:
@@ -363,136 +382,190 @@ class SimpleMASWGUI:
         self._on_receiver_config_change()
 
     def preview_array(self):
-        """Build embedded preview (array schematic + waterfall)."""
+        """Build embedded preview (array schematic + waterfall/spectrum)."""
         path = self._resolve_selected_path()
         if path is None:
             messagebox.showerror("Preview", "No file selected.")
             return
         try:
             from matplotlib.figure import Figure
-            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-            from sw_transform.processing.seg2 import load_seg2_ar
-            from sw_transform.processing.preprocess import preprocess_data
             import numpy as np
 
-            time, T, Shotpoint, Spacing, dt, _ = load_seg2_ar(path)
-            
-            # Update array config panel with file info
-            n_channels_file = T.shape[1]
-            if self.array_config:
-                self.array_config.set_file_info(n_channels_file, float(Spacing))
-
-            # Get preprocessing params from limits panel
-            limits = self.limits_panel.get_values()
-            st = limits['time_start']
-            en = limits['time_end']
-            ds = self.advanced.downsample_var.get()
-            df = int(self.advanced.down_factor_var.get())
-            nf = int(self.advanced.numf_var.get())
-
-            # Preprocess with all channels from file
-            Tpre, time_pre, dt2 = preprocess_data(
-                T, time, dt, reverse_shot=False,
-                start_time=st, end_time=en,
-                do_downsample=ds, down_factor=df, numf=nf,
-                numchannels=n_channels_file
-            )
-
-            # Optional display time trim
-            disp_txt = (self.array_preview.display_time_var.get() or "").strip()
-            if disp_txt:
-                try:
-                    disp_time = float(disp_txt)
-                    if disp_time > 0:
-                        n_keep = int(np.clip(disp_time / dt2, 1, Tpre.shape[0]))
-                        Tpre = Tpre[:n_keep, :]
-                        time_pre = time_pre[:n_keep]
-                except Exception:
-                    pass
-
-            # All geophone positions from file
-            all_positions = np.arange(n_channels_file, dtype=float) * float(Spacing)
-            
-            # Get selected indices from array config
-            selected_indices = None
-            if self.array_config:
-                try:
-                    arr_cfg = self.array_config.get_config()
-                    selected_indices = arr_cfg.get_selected_indices()
-                except Exception:
-                    pass
-            fig = Figure(figsize=(7.5, 6.0), dpi=100)
-            gs = fig.add_gridspec(2, 1, height_ratios=[1, 3], hspace=0.42)
-            ax1 = fig.add_subplot(gs[0])
-            ax2 = fig.add_subplot(gs[1])
-
-            # Schematic - show all geophones, highlight selected
-            if selected_indices is not None and len(selected_indices) > 0:
-                selected_set = set(selected_indices)
-                inactive_idx = [i for i in range(n_channels_file) if i not in selected_set]
-                active_idx = list(selected_indices)
-                
-                if inactive_idx:
-                    inactive_pos = all_positions[inactive_idx]
-                    ax1.plot(inactive_pos, np.zeros_like(inactive_pos), "^", 
-                            color="lightgray", markersize=6, label="Inactive")
-                if active_idx:
-                    active_pos = all_positions[active_idx]
-                    ax1.plot(active_pos, np.zeros_like(active_pos), "^", 
-                            color="green", markersize=8, label="Selected")
-            else:
-                ax1.plot(all_positions, np.zeros_like(all_positions), "^", 
-                        color="green", markersize=8, label="Sensor")
-
-            # Source position from source_config or file tree
             base = os.path.splitext(os.path.basename(path))[0]
-            try:
-                if self.source_config:
-                    positions = self.source_config.get_source_positions()
-                    src_x = positions.get(base, 0.0)
-                else:
-                    off_txt = (self.file_tree.offsets.get(base, "+0") or "+0").strip().replace("m", "")
-                    if off_txt.startswith("+"):
-                        src_x = float(off_txt[1:])
-                    else:
-                        src_x = float(off_txt)
-            except Exception:
-                src_x = float(Shotpoint)
+            is_mat = path.lower().endswith('.mat')
 
-            ax1.plot([src_x], [0.0], "D", color="tab:red", markersize=10, label="Source")
-            ax1.set_yticks([])
-            ax1.set_xlabel("Distance (m)")
-            ax1.legend(loc="upper left", bbox_to_anchor=(1.02, 1), borderaxespad=0)
-            ax1.set_title("Array schematic")
-
-            # Waterfall - show all traces, highlight selected
-            traces = Tpre.copy().T
-            denom = np.max(np.abs(traces), axis=1, keepdims=True)
-            denom[denom == 0] = 1.0
-            traces = traces / denom
-            spacing = float(np.mean(np.diff(all_positions))) if len(all_positions) > 1 else 1.0
-            scale = 0.5 * spacing
-            
-            for i, (tr, x0) in enumerate(zip(traces, all_positions)):
-                if selected_indices is not None and len(selected_indices) > 0:
-                    color = "blue" if i in set(selected_indices) else "lightgray"
-                    lw = 0.6 if i in set(selected_indices) else 0.3
-                else:
-                    color = "blue"
-                    lw = 0.5
-                ax2.plot(tr * scale + x0, time_pre, color=color, linewidth=lw)
-            
-            ax2.invert_yaxis()
-            ax2.set_xlabel("Distance (m)")
-            ax2.set_ylabel("Time (s)")
-            ax2.set_title("Waterfall (normalized)")
-            fig.tight_layout(rect=[0, 0, 0.88, 1])
-
-            # Mount to preview panel
-            self.array_preview.set_figure(fig)
+            if is_mat:
+                self._preview_vibrosis(path, base)
+            else:
+                self._preview_seg2(path, base)
 
         except Exception as e:
             messagebox.showerror("Preview", str(e))
+
+    def _preview_seg2(self, path: str, base: str):
+        """Preview for SEG-2 (.dat) files: array schematic + time-domain waterfall."""
+        from matplotlib.figure import Figure
+        from sw_transform.processing.seg2 import load_seg2_ar
+        from sw_transform.processing.preprocess import preprocess_data
+        import numpy as np
+
+        time, T, Shotpoint, Spacing, dt, _ = load_seg2_ar(path)
+        
+        n_channels_file = T.shape[1]
+        if self.array_config:
+            self.array_config.set_file_info(n_channels_file, float(Spacing))
+
+        limits = self.limits_panel.get_values()
+        st = limits['time_start']
+        en = limits['time_end']
+        ds = self.advanced.downsample_var.get()
+        df = int(self.advanced.down_factor_var.get())
+        nf = int(self.advanced.numf_var.get())
+
+        Tpre, time_pre, dt2 = preprocess_data(
+            T, time, dt, reverse_shot=False,
+            start_time=st, end_time=en,
+            do_downsample=ds, down_factor=df, numf=nf,
+            numchannels=n_channels_file
+        )
+
+        disp_txt = (self.array_preview.display_time_var.get() or "").strip()
+        if disp_txt:
+            try:
+                disp_time = float(disp_txt)
+                if disp_time > 0:
+                    n_keep = int(np.clip(disp_time / dt2, 1, Tpre.shape[0]))
+                    Tpre = Tpre[:n_keep, :]
+                    time_pre = time_pre[:n_keep]
+            except Exception:
+                pass
+
+        all_positions = np.arange(n_channels_file, dtype=float) * float(Spacing)
+        
+        selected_indices = None
+        if self.array_config:
+            try:
+                arr_cfg = self.array_config.get_config()
+                selected_indices = arr_cfg.get_selected_indices()
+            except Exception:
+                pass
+
+        fig = Figure(figsize=(7.5, 6.0), dpi=100)
+        gs = fig.add_gridspec(2, 1, height_ratios=[1, 3], hspace=0.42)
+        ax1 = fig.add_subplot(gs[0])
+        ax2 = fig.add_subplot(gs[1])
+
+        self._draw_array_schematic(ax1, all_positions, selected_indices, base, n_channels_file)
+
+        # Waterfall - show all traces, highlight selected
+        traces = Tpre.copy().T
+        denom = np.max(np.abs(traces), axis=1, keepdims=True)
+        denom[denom == 0] = 1.0
+        traces = traces / denom
+        spacing = float(np.mean(np.diff(all_positions))) if len(all_positions) > 1 else 1.0
+        scale = 0.5 * spacing
+        
+        for i, (tr, x0) in enumerate(zip(traces, all_positions)):
+            if selected_indices is not None and len(selected_indices) > 0:
+                color = "blue" if i in set(selected_indices) else "lightgray"
+                lw = 0.6 if i in set(selected_indices) else 0.3
+            else:
+                color = "blue"
+                lw = 0.5
+            ax2.plot(tr * scale + x0, time_pre, color=color, linewidth=lw)
+        
+        ax2.invert_yaxis()
+        ax2.set_xlabel("Distance (m)")
+        ax2.set_ylabel("Time (s)")
+        ax2.set_title("Waterfall (normalized)")
+        fig.tight_layout(rect=[0, 0, 0.88, 1])
+
+        self.array_preview.set_figure(fig)
+
+    def _preview_vibrosis(self, path: str, base: str):
+        """Preview for vibrosis (.mat) files: array schematic + TF magnitude per channel."""
+        from matplotlib.figure import Figure
+        from sw_transform.processing.vibrosis import load_vibrosis_mat
+        import numpy as np
+
+        data = load_vibrosis_mat(path)
+        n_channels = data.n_channels
+        dx = float(self.advanced.dx_var.get())
+        
+        if self.array_config:
+            self.array_config.set_file_info(n_channels, dx)
+
+        all_positions = np.arange(n_channels, dtype=float) * dx
+
+        fig = Figure(figsize=(7.5, 6.0), dpi=100)
+        gs = fig.add_gridspec(2, 1, height_ratios=[1, 3], hspace=0.42)
+        ax1 = fig.add_subplot(gs[0])
+        ax2 = fig.add_subplot(gs[1])
+
+        self._draw_array_schematic(ax1, all_positions, None, base, n_channels)
+
+        # Transfer function magnitude per channel (frequency-domain waterfall)
+        tf_mag = np.abs(data.transfer_functions)  # (nfreq, nchannels)
+        # Normalize each channel
+        denom = np.max(tf_mag, axis=0, keepdims=True)
+        denom[denom == 0] = 1.0
+        tf_norm = tf_mag / denom
+        
+        spacing = dx
+        scale = 0.5 * spacing
+        
+        for i in range(n_channels):
+            x0 = all_positions[i]
+            ax2.plot(tf_norm[:, i] * scale + x0, data.frequencies, color="blue", linewidth=0.5)
+        
+        ax2.invert_yaxis()
+        ax2.set_xlabel("Distance (m)")
+        ax2.set_ylabel("Frequency (Hz)")
+        ax2.set_title("Transfer Function Magnitude (normalized)")
+        fig.tight_layout(rect=[0, 0, 0.88, 1])
+
+        self.array_preview.set_figure(fig)
+
+    def _draw_array_schematic(self, ax, all_positions, selected_indices, base: str, n_channels: int):
+        """Draw the array schematic on the given axes."""
+        import numpy as np
+        
+        if selected_indices is not None and len(selected_indices) > 0:
+            selected_set = set(selected_indices)
+            inactive_idx = [i for i in range(n_channels) if i not in selected_set]
+            active_idx = list(selected_indices)
+            
+            if inactive_idx:
+                inactive_pos = all_positions[inactive_idx]
+                ax.plot(inactive_pos, np.zeros_like(inactive_pos), "^", 
+                        color="lightgray", markersize=6, label="Inactive")
+            if active_idx:
+                active_pos = all_positions[active_idx]
+                ax.plot(active_pos, np.zeros_like(active_pos), "^", 
+                        color="green", markersize=8, label="Selected")
+        else:
+            ax.plot(all_positions, np.zeros_like(all_positions), "^", 
+                    color="green", markersize=8, label="Sensor")
+
+        # Source position from source_config or file tree
+        try:
+            if self.source_config:
+                positions = self.source_config.get_source_positions()
+                src_x = positions.get(base, 0.0)
+            else:
+                off_txt = (self.file_tree.offsets.get(base, "+0") or "+0").strip().replace("m", "")
+                if off_txt.startswith("+"):
+                    src_x = float(off_txt[1:])
+                else:
+                    src_x = float(off_txt)
+        except Exception:
+            src_x = 0.0
+
+        ax.plot([src_x], [0.0], "D", color="tab:red", markersize=10, label="Source")
+        ax.set_yticks([])
+        ax.set_xlabel("Distance (m)")
+        ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), borderaxespad=0)
+        ax.set_title("Array schematic")
 
     def _resolve_selected_path(self) -> str | None:
         """Get path of selected file in tree, or first file if none selected."""
@@ -724,7 +797,11 @@ class SimpleMASWGUI:
                     plot_max_freq=self.advanced.plot_max_freq_var.get(),
                     cmap=self.advanced.cmap_var.get(),
                     freq_tick_spacing=self.advanced.freq_tick_spacing_var.get(),
-                    vel_tick_spacing=self.advanced.vel_tick_spacing_var.get()
+                    vel_tick_spacing=self.advanced.vel_tick_spacing_var.get(),
+                    fig_width=self.advanced.fig_width_var.get(),
+                    fig_height=self.advanced.fig_height_var.get(),
+                    contour_levels=self.advanced.contour_levels_var.get(),
+                    plot_style=self.advanced.plot_style_var.get()
                 )
                 params_list.append(params)
 
@@ -1083,11 +1160,34 @@ class SimpleMASWGUI:
         """Aggregate per-shot CSVs into combined_<method>.csv across all offsets."""
         try:
             import csv
+            
+            # Get source positions from source_config (same as run_single_processing)
+            source_positions = {}
+            if self.source_config:
+                source_positions = self.source_config.get_source_positions()
+            
+            # Get array start for relative_offset computation
+            array_start = 0.0
+            if self.receiver_config:
+                try:
+                    rcfg = self.receiver_config.get_config()
+                    pos_arr = rcfg.get_positions()
+                    if len(pos_arr) > 0:
+                        array_start = float(pos_arr[0])
+                except Exception:
+                    pass
+            
             combined_rows = []
             for path in paths:
                 base = os.path.splitext(os.path.basename(path))[0]
-                offset = self.file_tree.offsets.get(base, "+0")
-                _off = str(offset).strip().replace(" ", "").replace("m", "")
+                
+                # Compute relative_offset the same way as run_single_processing
+                src_pos = source_positions.get(base, 0.0)
+                relative_offset = src_pos - array_start
+                offset_for_csv = f"{relative_offset:+.0f}"
+                
+                # Build offset tag matching service.py naming
+                _off = offset_for_csv.strip().replace(" ", "").replace("m", "")
                 if _off.startswith("+"):
                     _off_tag = "p" + _off[1:]
                 elif _off.startswith("-"):
@@ -1113,7 +1213,7 @@ class SimpleMASWGUI:
                 except Exception:
                     continue
                 if frq:
-                    combined_rows.append((offset, frq, vel, wl))
+                    combined_rows.append((offset_for_csv, frq, vel, wl))
 
             if combined_rows and len(combined_rows) > 1:
                 min_len = min(len(r[1]) for r in combined_rows)

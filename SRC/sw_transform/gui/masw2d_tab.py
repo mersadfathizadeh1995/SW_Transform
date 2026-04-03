@@ -78,6 +78,10 @@ class MASW2DTab:
         self.plot_max_freq_var = tk.StringVar(value=self._DEFAULTS['plot_max_freq'])
         self.cmap_var = tk.StringVar(value=self._DEFAULTS['cmap'])
         self.dpi_var = tk.StringVar(value=self._DEFAULTS['dpi'])
+        self.fig_width_var = tk.StringVar(value=self._DEFAULTS.get('fig_width', '8'))
+        self.fig_height_var = tk.StringVar(value=self._DEFAULTS.get('fig_height', '6'))
+        self.contour_levels_var = tk.StringVar(value=self._DEFAULTS.get('contour_levels', '30'))
+        self.plot_style_var = tk.StringVar(value=self._DEFAULTS.get('plot_style', 'contourf'))
     def _on_vibrosis_changed(self, *args):
         """Auto-check cylindrical when vibrosis is enabled."""
         if self.vibrosis_var.get():
@@ -262,6 +266,10 @@ class MASW2DTab:
         self.dpi_var.set(self._DEFAULTS['dpi'])
         self.vibrosis_var.set(self._DEFAULTS['vibrosis'])
         self.cylindrical_var.set(self._DEFAULTS['cylindrical'])
+        self.fig_width_var.set(self._DEFAULTS.get('fig_width', '8'))
+        self.fig_height_var.set(self._DEFAULTS.get('fig_height', '6'))
+        self.contour_levels_var.set(self._DEFAULTS.get('contour_levels', '30'))
+        self.plot_style_var.set(self._DEFAULTS.get('plot_style', 'contourf'))
     def _open_advanced_settings(self):
         """Open the advanced settings popup window."""
         popup = tk.Toplevel(self.parent)
@@ -354,15 +362,37 @@ class MASW2DTab:
         row11 = ttk.Frame(image_frame)
         row11.pack(fill="x", pady=3)
         ttk.Label(row11, text="Colormap:", width=18).pack(side="left")
+        from sw_transform.gui.components.advanced_settings import AdvancedSettingsManager
         ttk.Combobox(row11, textvariable=self.cmap_var,
-                     values=["jet", "viridis", "plasma", "turbo", "seismic", "hot"],
-                     width=10, state="readonly").pack(side="left", padx=4)
+                     values=AdvancedSettingsManager.COLORMAPS,
+                     width=16).pack(side="left", padx=4)
         row12 = ttk.Frame(image_frame)
         row12.pack(fill="x", pady=3)
         ttk.Label(row12, text="DPI:", width=18).pack(side="left")
         ttk.Combobox(row12, textvariable=self.dpi_var,
                      values=["72", "100", "150", "200", "300"],
                      width=10, state="readonly").pack(side="left", padx=4)
+        # Figure size
+        row13 = ttk.Frame(image_frame)
+        row13.pack(fill="x", pady=3)
+        ttk.Label(row13, text="Figure Width:", width=18).pack(side="left")
+        ttk.Entry(row13, textvariable=self.fig_width_var, width=6).pack(side="left", padx=2)
+        ttk.Label(row13, text="Height:").pack(side="left", padx=(8, 0))
+        ttk.Entry(row13, textvariable=self.fig_height_var, width=6).pack(side="left", padx=2)
+        ttk.Label(row13, text="in", foreground="gray").pack(side="left", padx=2)
+        # Plot style and contour levels
+        row14 = ttk.Frame(image_frame)
+        row14.pack(fill="x", pady=3)
+        ttk.Label(row14, text="Plot Style:", width=18).pack(side="left")
+        ttk.Combobox(row14, textvariable=self.plot_style_var,
+                     values=["contourf", "pcolormesh"],
+                     width=12, state="readonly").pack(side="left", padx=4)
+        row15 = ttk.Frame(image_frame)
+        row15.pack(fill="x", pady=3)
+        ttk.Label(row15, text="Contour Levels:", width=18).pack(side="left")
+        ttk.Combobox(row15, textvariable=self.contour_levels_var,
+                     values=["10", "15", "20", "30", "50", "100"],
+                     width=10).pack(side="left", padx=4)
         # Buttons
         btn_frame = ttk.Frame(scrollable)
         btn_frame.pack(fill="x", padx=8, pady=12)
@@ -457,7 +487,11 @@ class MASW2DTab:
                 "auto_velocity_limit": auto_velocity_limit,
                 "auto_frequency_limit": auto_frequency_limit,
                 "cmap": self.cmap_var.get(),
-                "image_dpi": dpi
+                "image_dpi": dpi,
+                "fig_width": self.fig_width_var.get(),
+                "fig_height": self.fig_height_var.get(),
+                "contour_levels": self.contour_levels_var.get(),
+                "plot_style": self.plot_style_var.get()
             }
         }
         return config

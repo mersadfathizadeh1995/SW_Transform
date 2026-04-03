@@ -33,16 +33,19 @@ class FileTreePanel(tk.Frame):
     
     def __init__(self, parent: tk.Widget, 
                  log_callback: Callable[[str], None] | None = None,
+                 on_offset_change: Callable | None = None,
                  **kwargs):
         """Initialize the file tree panel.
         
         Args:
             parent: Parent widget
             log_callback: Optional callback for logging messages
+            on_offset_change: Optional callback when offset is edited
             **kwargs: Additional Frame options
         """
         super().__init__(parent, **kwargs)
         self.log = log_callback or (lambda msg: None)
+        self.on_offset_change = on_offset_change
         
         # State - copied from simple_app.py lines 60-70
         self.file_list: list[str] = []
@@ -188,6 +191,8 @@ class FileTreePanel(tk.Frame):
                 self.offsets[base] = vals[2]
                 self.tree.item(item, values=vals)
                 e.destroy()
+                if self.on_offset_change:
+                    self.on_offset_change(base, vals[2])
             
             e.bind("<Return>", _done)
             e.bind("<FocusOut>", _done)
