@@ -25,6 +25,7 @@ from sw_transform.masw2d.gui import (
     MASW2DRunPanel,
     LayoutPreviewPanel,
     MASW2DAdvancedSettings,
+    AssignmentPanel,
 )
 class MASW2DTab:
     """MASW 2D processing tab widget using component-based architecture."""
@@ -55,6 +56,7 @@ class MASW2DTab:
         self.output_panel: Optional[OutputPanel] = None
         self.run_panel: Optional[MASW2DRunPanel] = None
         self.preview_panel: Optional[LayoutPreviewPanel] = None
+        self.assignment_panel: Optional[AssignmentPanel] = None
         self._build_ui()
     def _create_advanced_variables(self):
         """Create tk variables for advanced settings."""
@@ -140,7 +142,14 @@ class MASW2DTab:
             on_preview_change=self._update_preview
         )
         self.subarray_panel.pack(fill="x")
-        # ===== 4. Processing Panel =====
+        # ===== 4. Shot Assignment Panel =====
+        self._assignment_collapse = CollapsibleLabelFrame(
+            scrollable, title="Shot Assignment"
+        )
+        self._assignment_collapse.pack(fill="x", padx=4, pady=2)
+        self.assignment_panel = AssignmentPanel(self._assignment_collapse.content)
+        self.assignment_panel.pack(fill="x")
+        # ===== 5. Processing Panel =====
         self._processing_collapse = CollapsibleLabelFrame(scrollable, title="Processing")
         self._processing_collapse.pack(fill="x", padx=4, pady=2)
         self.processing_panel = ProcessingPanel(
@@ -148,12 +157,12 @@ class MASW2DTab:
             on_advanced_click=self._open_advanced_settings
         )
         self.processing_panel.pack(fill="x")
-        # ===== 5. Output Panel =====
+        # ===== 6. Output Panel =====
         self._output_collapse = CollapsibleLabelFrame(scrollable, title="Output")
         self._output_collapse.pack(fill="x", padx=4, pady=2)
         self.output_panel = OutputPanel(self._output_collapse.content)
         self.output_panel.pack(fill="x")
-        # ===== 6. Run Panel =====
+        # ===== 7. Run Panel =====
         self.run_panel = MASW2DRunPanel(
             scrollable,
             on_run=self._run_workflow
@@ -494,6 +503,11 @@ class MASW2DTab:
                 "plot_style": self.plot_style_var.get()
             }
         }
+        # Assignment section (only when panel is enabled)
+        if self.assignment_panel:
+            assign_cfg = self.assignment_panel.get_config()
+            if assign_cfg is not None:
+                config["assignment"] = assign_cfg
         return config
     # ==================== Workflow Execution ====================
     def _run_workflow(self):
@@ -546,8 +560,13 @@ class MASW2DTab:
                     workflow.set_progress_callback(progress_cb)
                     results = workflow.run(mat_files=mat_files, output_dir=output_dir)
                 else:
-                    from sw_transform.masw2d.workflows import StandardMASWWorkflow
-                    workflow = StandardMASWWorkflow(config)
+                    use_assignment = "assignment" in config
+                    if use_assignment:
+                        from sw_transform.masw2d.workflows import AssignedMASWWorkflow
+                        workflow = AssignedMASWWorkflow(config)
+                    else:
+                        from sw_transform.masw2d.workflows import StandardMASWWorkflow
+                        workflow = StandardMASWWorkflow(config)
                     output_values = self.output_panel.get_values()
                     def progress_cb(current, total, msg):
                         pct = (current / total * 100) if total > 0 else 0

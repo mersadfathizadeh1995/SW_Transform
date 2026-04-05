@@ -32,6 +32,12 @@ class ShotType(Enum):
     
     INTERIOR = "interior"
     """Source is inside the array (between first and last geophone)"""
+    
+    INTERIOR_LEFT = "interior_left"
+    """Source is inside the array, closer to the left (start) edge"""
+    
+    INTERIOR_RIGHT = "interior_right"
+    """Source is inside the array, closer to the right (end) edge"""
 
 
 @dataclass
@@ -203,3 +209,46 @@ def filter_shots_by_type(shots: List[ShotInfo], shot_types: List[ShotType]) -> L
         Filtered shots
     """
     return [s for s in shots if s.shot_type in shot_types]
+
+
+def classify_shot_for_subarray(
+    source_position: float,
+    subarray_start: float,
+    subarray_end: float,
+    tolerance: float = 0.01,
+) -> ShotType:
+    """Classify shot relative to a specific subarray (not the main array).
+
+    Unlike :func:`classify_shot`, this distinguishes interior shots by
+    proximity to the left or right edge of the subarray, returning
+    ``INTERIOR_LEFT`` or ``INTERIOR_RIGHT`` accordingly.
+
+    Parameters
+    ----------
+    source_position : float
+        Position of the source in metres.
+    subarray_start : float
+        Position of the first geophone of the subarray.
+    subarray_end : float
+        Position of the last geophone of the subarray.
+    tolerance : float
+        Edge-detection tolerance in metres.
+
+    Returns
+    -------
+    ShotType
+    """
+    if abs(source_position - subarray_start) < tolerance:
+        return ShotType.EDGE_LEFT
+    if abs(source_position - subarray_end) < tolerance:
+        return ShotType.EDGE_RIGHT
+    if source_position < subarray_start:
+        return ShotType.EXTERIOR_LEFT
+    if source_position > subarray_end:
+        return ShotType.EXTERIOR_RIGHT
+
+    dist_start = source_position - subarray_start
+    dist_end = subarray_end - source_position
+    if dist_start <= dist_end:
+        return ShotType.INTERIOR_LEFT
+    return ShotType.INTERIOR_RIGHT

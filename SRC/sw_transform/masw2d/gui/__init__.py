@@ -25,6 +25,7 @@ from sw_transform.masw2d.gui.output_panel import OutputPanel
 from sw_transform.masw2d.gui.run_panel import MASW2DRunPanel
 from sw_transform.masw2d.gui.layout_preview import LayoutPreviewPanel
 from sw_transform.masw2d.gui.advanced_settings import MASW2DAdvancedSettings
+from sw_transform.masw2d.gui.assignment_panel import AssignmentPanel
 
 __all__ = [
     'MASW2D_DEFAULTS',
@@ -37,4 +38,5 @@ __all__ = [
     'MASW2DRunPanel',
     'LayoutPreviewPanel',
     'MASW2DAdvancedSettings',
+    'AssignmentPanel',
 ]

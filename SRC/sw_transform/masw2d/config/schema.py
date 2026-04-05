@@ -45,6 +45,20 @@ SURVEY_CONFIG_SCHEMA = {
         "directory": "string - Output directory path",
         "organize_by": "string - Organization: midpoint, shot, or flat (default: midpoint)",
         "export_formats": "list - Export formats: csv, npz (default: [csv])"
+    },
+    "assignment": {
+        "strategy": "string (optional) - Assignment strategy: max_coverage, balanced, offset_optimized, both_sides_priority, manual, exterior_only (default: exterior_only)",
+        "constraints": {
+            "max_offset": "float or null (optional) - Absolute max source offset in metres (default: null = no limit)",
+            "min_offset": "float (optional) - Absolute min source offset in metres (default: 0.0)",
+            "max_offset_ratio": "float (optional) - Max offset/subarray_length ratio (default: 2.0)",
+            "min_offset_ratio": "float (optional) - Min offset/subarray_length ratio (default: 0.0)",
+            "max_shots_per_subarray": "int or null (optional) - Cap per subarray (default: null = unlimited)",
+            "require_both_sides": "bool (optional) - Must have forward+reverse (default: false)",
+            "min_shots_per_side": "int (optional) - Min shots per direction (default: 0)",
+            "allow_interior_shots": "bool (optional) - Allow shots inside subarray span (default: false)",
+        },
+        "manual_assignments": "list or null (optional) - Explicit shot-subarray mappings for manual strategy"
     }
 }
 
@@ -157,6 +171,61 @@ def validate_config(config: Dict[str, Any]) -> Tuple[bool, List[str]]:
                     if fmt not in valid_formats:
                         errors.append(f"output.export_formats: unknown format '{fmt}'")
     
+    # Assignment configuration (optional but validate if present)
+    if "assignment" in config:
+        assign = config["assignment"]
+        if not isinstance(assign, dict):
+            errors.append("assignment must be a dict")
+        else:
+            if "strategy" in assign:
+                valid_strategies = [
+                    "max_coverage", "balanced", "offset_optimized",
+                    "both_sides_priority", "manual", "exterior_only",
+                ]
+                if assign["strategy"] not in valid_strategies:
+                    errors.append(
+                        f"assignment.strategy must be one of: {valid_strategies}"
+                    )
+
+            if "constraints" in assign:
+                cns = assign["constraints"]
+                if not isinstance(cns, dict):
+                    errors.append("assignment.constraints must be a dict")
+                else:
+                    for key in ("max_offset", "min_offset"):
+                        if key in cns and cns[key] is not None:
+                            if not isinstance(cns[key], (int, float)):
+                                errors.append(f"assignment.constraints.{key} must be a number or null")
+                    for key in ("max_offset_ratio", "min_offset_ratio"):
+                        if key in cns:
+                            if not isinstance(cns[key], (int, float)) or cns[key] < 0:
+                                errors.append(f"assignment.constraints.{key} must be a non-negative number")
+                    if "max_shots_per_subarray" in cns and cns["max_shots_per_subarray"] is not None:
+                        v = cns["max_shots_per_subarray"]
+                        if not isinstance(v, int) or v < 1:
+                            errors.append("assignment.constraints.max_shots_per_subarray must be a positive integer or null")
+                    for key in ("require_both_sides", "allow_interior_shots"):
+                        if key in cns and not isinstance(cns[key], bool):
+                            errors.append(f"assignment.constraints.{key} must be a boolean")
+                    if "min_shots_per_side" in cns:
+                        v = cns["min_shots_per_side"]
+                        if not isinstance(v, int) or v < 0:
+                            errors.append("assignment.constraints.min_shots_per_side must be a non-negative integer")
+
+            if "manual_assignments" in assign and assign["manual_assignments"] is not None:
+                ma = assign["manual_assignments"]
+                if not isinstance(ma, list):
+                    errors.append("assignment.manual_assignments must be a list or null")
+                else:
+                    for i, entry in enumerate(ma):
+                        if not isinstance(entry, dict):
+                            errors.append(f"assignment.manual_assignments[{i}] must be a dict")
+                        else:
+                            if "subarray_index" not in entry:
+                                errors.append(f"assignment.manual_assignments[{i}]: missing subarray_index")
+                            if "shot_indices" not in entry or not isinstance(entry.get("shot_indices"), list):
+                                errors.append(f"assignment.manual_assignments[{i}]: shot_indices must be a list")
+
     return len(errors) == 0, errors
 
 

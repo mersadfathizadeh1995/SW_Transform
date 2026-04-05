@@ -32,6 +32,20 @@ DEFAULTS = {
         "directory": "./output_2d/",
         "organize_by": "midpoint",
         "export_formats": ["csv"]
+    },
+    "assignment": {
+        "strategy": "exterior_only",
+        "constraints": {
+            "max_offset": None,
+            "min_offset": 0.0,
+            "max_offset_ratio": 2.0,
+            "min_offset_ratio": 0.0,
+            "max_shots_per_subarray": None,
+            "require_both_sides": False,
+            "min_shots_per_side": 0,
+            "allow_interior_shots": False,
+        },
+        "manual_assignments": None,
     }
 }
 
@@ -81,6 +95,22 @@ def apply_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
         for key, val in DEFAULTS["output"].items():
             if key not in config["output"]:
                 config["output"][key] = val
+    
+    # Assignment defaults (only fill missing sub-keys; if section absent
+    # the default strategy is exterior_only for backward compatibility)
+    if "assignment" in config:
+        assign = config["assignment"]
+        assign_defaults = DEFAULTS["assignment"]
+        if "strategy" not in assign:
+            assign["strategy"] = assign_defaults["strategy"]
+        if "constraints" not in assign:
+            assign["constraints"] = assign_defaults["constraints"].copy()
+        else:
+            for key, val in assign_defaults["constraints"].items():
+                if key not in assign["constraints"]:
+                    assign["constraints"][key] = val
+        if "manual_assignments" not in assign:
+            assign["manual_assignments"] = assign_defaults["manual_assignments"]
     
     return config
 

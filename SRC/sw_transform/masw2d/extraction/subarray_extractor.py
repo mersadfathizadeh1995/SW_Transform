@@ -5,14 +5,18 @@ Implements Method A: Sub-array extraction from fixed array data.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional, TYPE_CHECKING
 
 import numpy as np
 
 from ..geometry.subarray import SubArrayDef
 from ..geometry.shot_classifier import ShotInfo, ShotType
 from ..geometry.midpoint import calculate_source_offset, is_valid_offset
+
+if TYPE_CHECKING:
+    from ..geometry.shot_assigner import ShotAssignment, AssignmentPlan
 
 
 @dataclass
@@ -277,3 +281,124 @@ def load_and_extract_from_file(
         max_offset_ratio=max_offset_ratio,
         reverse_if_needed=reverse_if_needed
     )
+
+
+# ---------------------------------------------------------------------------
+# Assignment-based extraction (uses pre-computed direction / offset)
+# ---------------------------------------------------------------------------
+
+def extract_from_assignment(
+    shot_data: np.ndarray,
+    time: np.ndarray,
+    dt: float,
+    dx: float,
+    assignment: "ShotAssignment",
+    reverse_if_needed: bool = True,
+) -> ExtractedSubArray:
+    """Extract a sub-array using a pre-computed :class:`ShotAssignment`.
+
+    Unlike :func:`extract_subarray` this never raises ``ValueError`` for
+    interior shots because the direction and offset have already been
+    resolved by the assignment engine.
+
+    Parameters
+    ----------
+    shot_data : np.ndarray
+        Full shot gather, shape ``(n_samples, n_total_channels)``.
+    time : np.ndarray
+        Time vector.
+    dt : float
+        Sampling interval.
+    dx : float
+        Geophone spacing.
+    assignment : ShotAssignment
+        Pre-computed assignment from the shot-assigner engine.
+    reverse_if_needed : bool
+        If True, flip channel order for reverse shots.
+
+    Returns
+    -------
+    ExtractedSubArray
+
+    Raises
+    ------
+    IndexError
+        If the sub-array channels are out of bounds.
+    """
+    sa_def = assignment.subarray_def
+    start_ch = sa_def.start_channel
+    end_ch = sa_def.end_channel
+
+    if end_ch > shot_data.shape[1]:
+        raise IndexError(
+            f"Sub-array channels ({start_ch}-{end_ch - 1}) exceed "
+            f"data channels (0-{shot_data.shape[1] - 1})"
+        )
+
+    sub_data = shot_data[:, start_ch:end_ch].copy()
+
+    if reverse_if_needed and assignment.direction == "reverse":
+        sub_data = np.fliplr(sub_data)
+
+    shot_info = ShotInfo(
+        file=assignment.shot_file,
+        source_position=assignment.shot_position,
+        shot_type=ShotType.EXTERIOR_LEFT if assignment.direction == "forward" else ShotType.EXTERIOR_RIGHT,
+    )
+
+    return ExtractedSubArray(
+        data=sub_data,
+        time=time.copy(),
+        dt=dt,
+        dx=dx,
+        subarray_def=sa_def,
+        shot_info=shot_info,
+        source_offset=assignment.source_offset,
+        direction=assignment.direction,
+    )
+
+
+def extract_all_from_plan(
+    shot_data_map: Dict[str, tuple],
+    plan: "AssignmentPlan",
+    dx: float,
+    reverse_if_needed: bool = True,
+) -> List[ExtractedSubArray]:
+    """Extract all sub-arrays described by an :class:`AssignmentPlan`.
+
+    Parameters
+    ----------
+    shot_data_map : dict
+        Mapping of shot file path to ``(time, data, dt)`` tuples where
+        *data* has shape ``(n_samples, n_total_channels)``.
+    plan : AssignmentPlan
+        Complete assignment plan.
+    dx : float
+        Geophone spacing in metres.
+    reverse_if_needed : bool
+        If True, flip channel order for reverse shots.
+
+    Returns
+    -------
+    list of ExtractedSubArray
+    """
+    results: List[ExtractedSubArray] = []
+
+    for assignment in plan.assignments:
+        shot_key = assignment.shot_file
+        if shot_key not in shot_data_map:
+            warnings.warn(f"Shot file not loaded: {shot_key}")
+            continue
+
+        time, data, dt = shot_data_map[shot_key]
+        try:
+            extracted = extract_from_assignment(
+                data, time, dt, dx, assignment,
+                reverse_if_needed=reverse_if_needed,
+            )
+            results.append(extracted)
+        except IndexError as e:
+            warnings.warn(f"Could not extract sub-array: {e}")
+            continue
+
+    return results

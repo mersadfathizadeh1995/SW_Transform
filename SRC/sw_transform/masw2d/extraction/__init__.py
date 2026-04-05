@@ -11,6 +11,8 @@ from .subarray_extractor import (
     ExtractedSubArray,
     extract_subarray,
     extract_all_subarrays_from_shot,
+    extract_from_assignment,
+    extract_all_from_plan,
 )
 
 from .vibrosis_extractor import (
@@ -27,6 +29,9 @@ __all__ = [
     "ExtractedSubArray",
     "extract_subarray",
     "extract_all_subarrays_from_shot",
+    # Assignment-based extraction
+    "extract_from_assignment",
+    "extract_all_from_plan",
     # Vibrosis .mat extraction
     "ExtractedVibrosisSubArray",
     "extract_vibrosis_subarray",

@@ -54,6 +54,11 @@ class StandardMASWWorkflow(BaseWorkflow):
        b. Extracts all valid sub-arrays
        c. Processes each sub-array for dispersion curve
     6. Organizes and exports results
+
+    When the config contains an ``"assignment"`` section, this workflow
+    delegates to :class:`~.assigned_masw.AssignedMASWWorkflow` which
+    uses the intelligent shot-subarray assignment engine.  Without that
+    section the legacy exterior-only behaviour is preserved.
     
     Parameters
     ----------
@@ -82,6 +87,12 @@ class StandardMASWWorkflow(BaseWorkflow):
         # Lazy-loaded properties
         self._classified_shots = None
         self._subarray_defs = None
+
+    @property
+    def _uses_assignment_engine(self) -> bool:
+        """True when the config has a non-exterior_only assignment section."""
+        assign = self.config.get("assignment", {})
+        return bool(assign) and assign.get("strategy", "exterior_only") != "exterior_only"
     
     @property
     def classified_shots(self):
@@ -149,6 +160,10 @@ class StandardMASWWorkflow(BaseWorkflow):
         Results are written to disk incrementally (CSV/NPZ) as produced,
         keeping memory usage bounded. Images are deferred to after all
         processing completes to avoid matplotlib overhead during transforms.
+
+        When the config contains an ``"assignment"`` section with a
+        strategy other than ``"exterior_only"``, processing is delegated
+        to :class:`AssignedMASWWorkflow`.
         
         Parameters
         ----------
@@ -164,6 +179,16 @@ class StandardMASWWorkflow(BaseWorkflow):
         dict
             Summary including status, counts, file paths, etc.
         """
+        if self._uses_assignment_engine:
+            from .assigned_masw import AssignedMASWWorkflow
+            delegate = AssignedMASWWorkflow(self.config)
+            delegate.set_progress_callback(self._progress_callback)
+            return delegate.run(
+                output_dir=output_dir,
+                parallel=parallel,
+                max_workers=max_workers,
+            )
+
         from sw_transform.processing.seg2 import load_seg2_ar
         
         # Determine output directory

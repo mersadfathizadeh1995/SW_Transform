@@ -187,6 +187,64 @@ def offset_quality_score(
     return score
 
 
+def calculate_source_offset_for_subarray(
+    source_position: float,
+    subarray: SubArrayDef,
+    tolerance: float = 0.01,
+) -> Tuple[float, str, bool]:
+    """Calculate source offset relative to a specific subarray.
+
+    Unlike :func:`calculate_source_offset`, this does **not** require a
+    pre-classified :class:`ShotInfo` and never raises for interior shots.
+
+    Parameters
+    ----------
+    source_position : float
+        Absolute source position on the survey line (metres).
+    subarray : SubArrayDef
+        Target subarray definition.
+    tolerance : float
+        Edge-detection tolerance in metres.
+
+    Returns
+    -------
+    offset : float
+        Distance from the source to the nearest subarray edge (always >= 0).
+    direction : str
+        ``"forward"`` if source is left of / at start of subarray,
+        ``"reverse"`` if right of / at end.
+    is_interior : bool
+        True when the source falls between the subarray edges.
+
+    Examples
+    --------
+    >>> sa = SubArrayDef(0, 12, 12, 0.0, 22.0, 11.0, 22.0, "shallow")
+    >>> calculate_source_offset_for_subarray(-10.0, sa)
+    (10.0, 'forward', False)
+    >>> calculate_source_offset_for_subarray(10.0, sa)
+    (10.0, 'forward', True)
+    """
+    sa_start = subarray.start_position
+    sa_end = subarray.end_position
+
+    if abs(source_position - sa_start) < tolerance:
+        return 0.0, "forward", False
+    if abs(source_position - sa_end) < tolerance:
+        return 0.0, "reverse", False
+
+    if source_position < sa_start:
+        return sa_start - source_position, "forward", False
+    if source_position > sa_end:
+        return source_position - sa_end, "reverse", False
+
+    # Interior: direction chosen by nearest edge
+    dist_start = source_position - sa_start
+    dist_end = sa_end - source_position
+    if dist_start <= dist_end:
+        return dist_start, "forward", True
+    return dist_end, "reverse", True
+
+
 def get_offset_info(
     shot: ShotInfo,
     subarray: SubArrayDef
