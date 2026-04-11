@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
+import numpy as np
+
 
 @dataclass
 class SubArrayDef:
@@ -213,6 +215,94 @@ def get_unique_midpoints(subarrays: List[SubArrayDef]) -> List[float]:
     """
     midpoints = set(sa.midpoint for sa in subarrays)
     return sorted(midpoints)
+
+
+def select_subarrays_by_spacing(
+    total_channels: int,
+    subarray_n_channels: int,
+    dx: float,
+    target_spacing: float,
+    first_position: float = 0.0,
+    config_name: str = "",
+) -> List[SubArrayDef]:
+    """Pick a subset of subarrays whose midpoints are *target_spacing* m apart.
+
+    Internally enumerates every possible position (slide_step=1), then
+    greedily selects starting from the first, skipping until the next
+    midpoint is >= *target_spacing* from the last picked.
+
+    Parameters
+    ----------
+    total_channels, subarray_n_channels, dx, first_position, config_name
+        Same semantics as :func:`enumerate_subarrays`.
+    target_spacing : float
+        Desired distance (m) between consecutive midpoints.
+
+    Returns
+    -------
+    list of SubArrayDef
+    """
+    all_sa = enumerate_subarrays(
+        total_channels, subarray_n_channels, dx,
+        first_position=first_position, slide_step=1, config_name=config_name,
+    )
+    if not all_sa:
+        return []
+    selected = [all_sa[0]]
+    for sa in all_sa[1:]:
+        if sa.midpoint - selected[-1].midpoint >= target_spacing - 1e-9:
+            selected.append(sa)
+    return selected
+
+
+def select_subarrays_by_count(
+    total_channels: int,
+    subarray_n_channels: int,
+    dx: float,
+    n_desired: int,
+    first_position: float = 0.0,
+    config_name: str = "",
+) -> List[SubArrayDef]:
+    """Pick *n_desired* subarrays with midpoints evenly distributed.
+
+    Enumerates all positions (slide_step=1), computes *n_desired* target
+    midpoints via ``np.linspace``, and snaps each target to the nearest
+    available subarray (without reusing the same subarray twice).
+
+    Parameters
+    ----------
+    total_channels, subarray_n_channels, dx, first_position, config_name
+        Same semantics as :func:`enumerate_subarrays`.
+    n_desired : int
+        Number of subarrays to return.
+
+    Returns
+    -------
+    list of SubArrayDef
+    """
+    all_sa = enumerate_subarrays(
+        total_channels, subarray_n_channels, dx,
+        first_position=first_position, slide_step=1, config_name=config_name,
+    )
+    if not all_sa:
+        return []
+    n_desired = max(1, min(n_desired, len(all_sa)))
+    if n_desired >= len(all_sa):
+        return list(all_sa)
+    midpoints = np.array([sa.midpoint for sa in all_sa])
+    targets = np.linspace(midpoints[0], midpoints[-1], n_desired)
+    used: set = set()
+    selected: List[SubArrayDef] = []
+    for t in targets:
+        diffs = np.abs(midpoints - t)
+        order = np.argsort(diffs)
+        for idx in order:
+            if int(idx) not in used:
+                used.add(int(idx))
+                selected.append(all_sa[int(idx)])
+                break
+    selected.sort(key=lambda s: s.midpoint)
+    return selected
 
 
 def count_subarrays_per_config(config: Dict[str, Any]) -> Dict[str, int]:

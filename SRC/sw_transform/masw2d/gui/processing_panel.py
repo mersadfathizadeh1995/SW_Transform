@@ -104,8 +104,8 @@ class ProcessingPanel(ttk.LabelFrame):
             vel_min = float(self.vel_min_var.get())
             vel_max = float(self.vel_max_var.get())
         except ValueError:
-            freq_min, freq_max = 5.0, 80.0
-            vel_min, vel_max = 100.0, 1500.0
+            freq_min, freq_max = 0.0, 100.0
+            vel_min, vel_max = 0.0, 4000.0
         
         return {
             'method': self.method_var.get(),

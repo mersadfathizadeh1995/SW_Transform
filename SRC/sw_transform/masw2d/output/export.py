@@ -348,7 +348,7 @@ def export_dispersion_image(
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
     
     # Create colormap with NaN color
-    cmap_obj = plt.cm.get_cmap(cmap).copy()
+    cmap_obj = matplotlib.colormaps[cmap].copy()
     if fill_nan:
         cmap_obj.set_bad(color=nan_color)
     else:

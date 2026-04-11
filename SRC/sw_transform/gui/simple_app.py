@@ -99,14 +99,19 @@ class SimpleMASWGUI:
 
     def _build_ui(self):
         """Build the main UI using components."""
-        # Left panel - File tree
-        left = tk.Frame(self.root, width=320)
-        left.pack(side="left", fill="y")
+        # Left column: collapsible file tree + thin toggle strip on the right edge
+        self._left_panel_expanded = True
+        self._LEFT_PANEL_WIDTH = 320
+        self._left_outer = tk.Frame(self.root)
+        self._left_outer.pack(side="left", fill="y")
+
+        self._left_content = tk.Frame(self._left_outer, width=self._LEFT_PANEL_WIDTH)
+        self._left_content.pack(side="left", fill="both", expand=True)
 
         # Button row for Open and Clear
-        btn_row = tk.Frame(left)
+        btn_row = tk.Frame(self._left_content)
         btn_row.pack(anchor="w", padx=8, pady=6)
-        
+
         # Open button with icon
         btn_open = tk.Button(btn_row, text=" Open Data...", command=self.select_files,
                              compound="left", padx=6, pady=4)
@@ -114,7 +119,7 @@ class SimpleMASWGUI:
         if ico is not None:
             btn_open.config(image=ico)
         btn_open.pack(side="left")
-        
+
         # Clear button
         btn_clear = tk.Button(btn_row, text=" Clear All", command=self.clear_all_files,
                               compound="left", padx=6, pady=4)
@@ -124,13 +129,28 @@ class SimpleMASWGUI:
         btn_clear.pack(side="left", padx=4)
 
         # File tree component
-        self.file_tree = FileTreePanel(left, log_callback=self._log,
+        self.file_tree = FileTreePanel(self._left_content, log_callback=self._log,
                                        on_offset_change=self._on_file_offset_change)
         self.file_tree.pack(fill="both", expand=True, padx=8, pady=4)
 
+        # Toggle strip (always visible): collapse / expand left panel
+        toggle_strip = tk.Frame(self._left_outer, width=22)
+        toggle_strip.pack(side="right", fill="y")
+        self._left_toggle_var = tk.StringVar(value="<<")
+        self._left_toggle_btn = tk.Button(
+            toggle_strip,
+            textvariable=self._left_toggle_var,
+            width=2,
+            command=self._toggle_left_panel,
+            relief="flat",
+            cursor="hand2",
+        )
+        self._left_toggle_btn.pack(fill="y", expand=True, padx=0, pady=40)
+
         # Center panel - Notebook with tabs
-        center = tk.Frame(self.root)
-        center.pack(side="left", fill="both", expand=True)
+        self._center_frame = tk.Frame(self.root)
+        self._center_frame.pack(side="left", fill="both", expand=True)
+        center = self._center_frame
 
         nb = ttk.Notebook(center)
         self.tab_inputs = tk.Frame(nb)
@@ -152,6 +172,17 @@ class SimpleMASWGUI:
         self._build_inputs_tab()
         self._build_run_tab()
         self._build_figures_tab()
+
+    def _toggle_left_panel(self) -> None:
+        """Collapse or expand the main file-tree column; toggle strip stays visible."""
+        if self._left_panel_expanded:
+            self._left_content.pack_forget()
+            self._left_toggle_var.set(">>")
+            self._left_panel_expanded = False
+        else:
+            self._left_content.pack(side="left", fill="both", expand=True)
+            self._left_toggle_var.set("<<")
+            self._left_panel_expanded = True
 
     def _build_inputs_tab(self):
         """Build the Inputs tab using components."""

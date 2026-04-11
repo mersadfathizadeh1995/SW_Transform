@@ -223,6 +223,97 @@ def generate_subarray_configs(
     return configs
 
 
+def generate_subarray_configs_smart(
+    sizes: List[int],
+    mode: str,
+    value: float,
+    total_channels: int,
+    dx: float,
+    first_position: float = 0.0,
+    naming: str = "depth",
+) -> List[Dict[str, Any]]:
+    """Generate subarray configs using smart placement modes.
+
+    Instead of a uniform slide-step, this function delegates to the
+    core ``select_subarrays_by_spacing`` / ``select_subarrays_by_count``
+    helpers so the user can ask for *N* midpoints or a target spacing.
+
+    Parameters
+    ----------
+    sizes : list of int
+        Channel counts to include.
+    mode : str
+        ``"spacing"`` -- *value* is target midpoint spacing in metres.
+        ``"count"``   -- *value* is desired number of midpoints per size.
+        ``"slide"``   -- *value* is slide-step in channels (legacy).
+    value : float
+        Interpretation depends on *mode*.
+    total_channels, dx, first_position
+        Array geometry.
+    naming : str
+        Naming scheme (``"depth"``, ``"auto"``, ``"numbered"``).
+
+    Returns
+    -------
+    list of dict
+        Each dict has ``"n_channels"``, ``"slide_step"`` (always 1 for
+        smart modes), ``"name"``, and an extra ``"_selected_subarrays"``
+        key containing the pre-computed ``List[SubArrayDef]``.
+    """
+    from sw_transform.masw2d.geometry.subarray import (
+        select_subarrays_by_count,
+        select_subarrays_by_spacing,
+        enumerate_subarrays,
+    )
+
+    sorted_sizes = sorted(sizes)
+    configs: List[Dict[str, Any]] = []
+
+    for i, n_ch in enumerate(sorted_sizes):
+        if naming == "depth":
+            name = f"{n_ch}ch"
+        elif naming == "numbered":
+            name = f"config_{i + 1}"
+        else:
+            if len(sorted_sizes) == 1:
+                name = "full"
+            elif n_ch == sorted_sizes[0]:
+                name = "shallow"
+            elif n_ch == sorted_sizes[-1]:
+                name = "deep"
+            else:
+                name = f"mid_{n_ch}ch"
+
+        if mode == "spacing":
+            selected = select_subarrays_by_spacing(
+                total_channels, n_ch, dx, float(value),
+                first_position=first_position, config_name=name,
+            )
+            slide = 1
+        elif mode == "count":
+            selected = select_subarrays_by_count(
+                total_channels, n_ch, dx, int(value),
+                first_position=first_position, config_name=name,
+            )
+            slide = 1
+        else:
+            slide = max(1, int(value))
+            selected = enumerate_subarrays(
+                total_channels, n_ch, dx,
+                first_position=first_position, slide_step=slide,
+                config_name=name,
+            )
+
+        configs.append({
+            "n_channels": n_ch,
+            "slide_step": slide,
+            "name": name,
+            "_selected_subarrays": selected,
+        })
+
+    return configs
+
+
 # =============================================================================
 # Main Template Generators
 # =============================================================================

@@ -26,6 +26,9 @@ from sw_transform.masw2d.gui.run_panel import MASW2DRunPanel
 from sw_transform.masw2d.gui.layout_preview import LayoutPreviewPanel
 from sw_transform.masw2d.gui.advanced_settings import MASW2DAdvancedSettings
 from sw_transform.masw2d.gui.assignment_panel import AssignmentPanel
+from sw_transform.masw2d.gui.shot_input_panel import ShotInputPanel
+from sw_transform.masw2d.gui.geometry_preview import GeometryPreviewPanel
+from sw_transform.masw2d.gui.subarray_explorer import SubarrayExplorerPanel
 
 __all__ = [
     'MASW2D_DEFAULTS',
@@ -39,4 +42,7 @@ __all__ = [
     'LayoutPreviewPanel',
     'MASW2DAdvancedSettings',
     'AssignmentPanel',
+    'ShotInputPanel',
+    'GeometryPreviewPanel',
+    'SubarrayExplorerPanel',
 ]

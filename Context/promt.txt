@@ -1,0 +1,49 @@
+You are working in the Python package at SW_Transform/SRC/sw_transform, with special focus on sw_transform/masw2d. Read the package structure and how MASW 2D workflows, config templates, subarray geometry, and shot assignment relate to each other.
+
+Reference case study: 4_Wave_Transform_MASW_toolkit/Case_Study/Processed/Experimental dispersion curves/Jasper Line 3A/jasper_line3a_analysis.md. That survey uses 48 geophones at 2 m spacing and many shot positions along the line, including shots inside the active geophone spread as well as outside it. Their workflow deliberately picks subarrays and source offsets so that they get useful relative offsets per subarray, often with both forward and reverse coverage where possible — not a naive “one slide step for everything” layout.
+
+Problem with the current MASW 2D experience
+
+Too manual — The user should not have to micromanage reverse vs forward per shot; the app should infer direction and relative offset to each subarray from absolute shot positions along the main line and the chosen subarray geometry.
+
+Inside-the-line shots — Today’s mental model works better when sources are only outside the array. For sources inside the spread, the tool must still be valid: all user-facing positions are along the main survey line; relative offset to the current subarray (and eligibility for forward/reverse assignment) is computed by the application, not typed in by the user per subarray.
+
+Subarray / midpoint strategy — The user wants Jasper-like control: e.g. a small number of dispersion midpoints with larger spacing, not dozens of subarrays every one geophone step. This belongs in core geometry/config and must drive the GUI (target midpoint spacing, target number of midpoints, optional legacy slide step).
+
+Intelligent assignment (generalized) — Beyond fixed strategies, the user wants configurable optimization over recorded shot positions, subarray definitions, and optional constraints, for example:
+
+Prefer as many usable source offsets as possible around each subarray, with an optional maximum offset (ignore or penalize shots beyond that limit; option to disable the cap).
+Or prefer fewer, well-chosen offsets (e.g. mimic a published field design).
+Ensure where possible both sides of a subarray are covered (forward/reverse), when geometry and shot list allow it.
+Support manual overrides (e.g. force or exclude specific shot–subarray pairs or offsets) when the user wants full control.
+The output of this layer should be a clear, runnable config (and traceable rationale in the UI) for extracting dispersion curves.
+
+GUI / file input — The main app can keep a collapsible left panel for the global file tree / “open project” workflow, and importing into MASW 2D from there is fine. But MASW 2D must have its own data-loading path:
+
+Define shot geometry with a pattern generator: start position, number of shots, spacing → generates a list of along-line positions; then assign files to those positions (browse, natural sort, auto-match by index, optional import from project list).
+The user does not want to only type shots one-by-one.
+Preview and layout — After array and shots (and assignment/subarray choices) are set, the user wants a strong visual: geophones, main line, shot locations, subarrays, and how shots tie to subarrays (plan view + per-subarray exploration). Problems to fix:
+
+Preview must update reliably when shots are imported or positions change.
+Right-hand preview should be collapsible and resizable; configuration and run should live in one place with the preview (no isolated “preview & run” tab that feels disconnected).
+The user wants to inspect subarrays one by one (table + highlighted geometry, relative offsets, depth/coverage cues, selected source for that subarray).
+Configuration UX — The right side of the MASW 2D area should present explicit, user-friendly configuration (data vs processing vs assignment vs output), not an overwhelming stack of opaque controls.
+
+What “done” looks like
+
+Data model: User supplies main array (e.g. N channels, dx, origin along line) and shot positions along that same line (from pattern + file assignment). Subarray placement uses smart spacing/count (and optional manual slide). Assignment engine computes per-subarray relative offsets and forward/reverse consistently, including inside-the-line shots.
+
+Intelligence layer: User-chosen modes and constraints (max offset, maximize count of offsets, prioritize both sides, presets inspired by Jasper-like layouts, optional manual tweaks) produce an assignment plan that is visible before run.
+
+GUI: Collapsible left (global files); MASW 2D Data tab for array + shot pattern + files; Config (or equivalent) combines subarray strategy, assignment options, processing, output, summary, and run, alongside a collapsible, resizable, high-quality geometry preview with overview + per-subarray detail.
+
+Instructions to the implementer
+
+Read jasper_line3a_analysis.md and align optional presets or explanations with that style of survey without hard-coding only that line.
+
+Implement or extend core APIs for: smart subarray selection; relative offset from main-line shot position to each subarray; constraint-based or scored assignment; and export to the existing workflow config.
+
+Redesign the MASW 2D tab so the above is obvious in the UI: pattern-based shots, file pairing, live geometry preview, merged config+run layout, collapsible preview.
+
+Prioritize clarity, defaults, and progressive disclosure (simple path first, advanced constraints available).
+

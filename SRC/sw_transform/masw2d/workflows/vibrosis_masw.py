@@ -227,8 +227,12 @@ class VibrosisMASWWorkflow(BaseWorkflow):
         source_positions = {}
         for shot in shots_config:
             shot_file = shot.get("file", "")
-            shot_file_norm = str(Path(shot_file).resolve()) if shot_file else ""
-            source_positions[shot_file_norm] = shot.get("source_position", 0.0)
+            if shot_file:
+                # Store both resolved and raw paths to maximize matching
+                shot_file_norm = str(Path(shot_file).resolve())
+                source_positions[shot_file_norm] = shot.get("source_position", 0.0)
+                # Also store the raw path for direct matching
+                source_positions[str(Path(shot_file))] = shot.get("source_position", 0.0)
         
         self._report_progress(0, total_files, "Starting vibrosis processing...")
         
@@ -243,7 +247,10 @@ class VibrosisMASWWorkflow(BaseWorkflow):
                 vibrosis_data = load_vibrosis_mat(str(mat_path))
                 
                 mat_path_norm = str(mat_path.resolve())
-                source_pos = source_positions.get(mat_path_norm, 0.0)
+                source_pos = source_positions.get(
+                    mat_path_norm,
+                    source_positions.get(str(mat_path), 0.0)
+                )
                 
                 shot_info = ShotInfo(
                     file=str(mat_path),
